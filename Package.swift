@@ -24,5 +24,6 @@ let package = Package(
         .testTarget(name: "SharedTests", dependencies: ["Shared"]),
         .testTarget(name: "GateCoreTests", dependencies: ["GateCore", "Shared"]),
         .testTarget(name: "cgateTests", dependencies: ["cgate", "Shared"]),
+        .testTarget(name: "ComputeManagerTests", dependencies: ["ComputeManager", "Shared"]),
     ]
 )

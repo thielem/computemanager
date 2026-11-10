@@ -1,16 +1,31 @@
-import GateCore
-import Shared
+import AppKit
 import SwiftUI
 
-/// Menu bar app. Placeholder menu. Owner: package B.
 @main
 struct ComputeManagerApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    private let model = AppRuntime.model
+
     var body: some Scene {
-        MenuBarExtra("Compute Manager", systemImage: "fan") {
-            Text("Compute Manager")
-            Divider()
-            Button("Quit") { NSApplication.shared.terminate(nil) }
-                .keyboardShortcut("q")
+        MenuBarExtra {
+            MenuContent(model: model)
+        } label: {
+            Image(nsImage: MenuBarIcon.image(for: model.icon))
         }
+        .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView(gate: model.gate)
+        }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        MainActor.assumeIsolated { AppRuntime.launch() }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { AppRuntime.terminate() }
     }
 }
