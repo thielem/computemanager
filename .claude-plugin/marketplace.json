@@ -1,0 +1,12 @@
+{
+  "name": "computemanager",
+  "description": "Compute Manager plugins",
+  "owner": { "name": "Moritz Thiele" },
+  "plugins": [
+    {
+      "name": "compute-gate",
+      "source": "./plugin/compute-gate",
+      "description": "Gate heavy agent runs (builds, tests) through Compute Manager: slots, tickets, stop notices."
+    }
+  ]
+}
