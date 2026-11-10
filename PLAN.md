@@ -10,7 +10,7 @@
 | Agents in scope | Claude Code only (for now) |
 | Core use case | User needs the machine (e.g. video call) → flip gate off, fans to Auto |
 | Distribution | Local build, ad-hoc signed (`codesign -s -`), no notarization |
-| Status | M0 spikes passed; M1 foundations in progress |
+| Status | M0 spikes passed; M1 built (fand, app, GateCore, cgate, plugin), pending user hardware test |
 
 ### Terms
 
@@ -18,7 +18,7 @@
 |---|---|
 | Gate | Global on/off switch + N concurrent slots for heavy agent runs |
 | Slot | One permit for a concurrently running heavy run (default N=2) |
-| Heavy run | Command executed via `cgate run` (explicit or auto-wrapped by hook) |
+| Heavy run | Command executed via `cgate run` (agent wraps it; hook denies heavy unwrapped commands with a copyable suggestion) |
 | Lease | Registry record of a heavy run holding a slot |
 | Walltime / max | Declared max runtime of a run; exceeded → soft stop, +60 s → hard stop |
 | Ticket | FIFO reservation for a rejected session: `{id, position, eta}` |
@@ -72,7 +72,7 @@ Priority: M = must, S = should, C = could.
 | AGENT-1 | `cgate run [--max <dur>] [--session <id>] [--ticket <id>] -- <cmd>` | M |
 | AGENT-1a | `cgate wait --ticket <id>`: blocks until slot reserved for ticket (exit 0, "slot ready, held until HH:MM — claim with `cgate run --ticket <id>`") or ticket expires (exit 79) | M |
 | AGENT-1b | Busy message tells agent to run `cgate wait --ticket <id>` in background; Claude Code's background-task completion re-invokes the agent | M |
-| AGENT-2 | PreToolUse Bash hook rewrites matching commands to `cgate run --session <id> -- <cmd>` via `updatedInput` + `permissionDecision: allow`; preserves `description`, `timeout`, `run_in_background` | M |
+| AGENT-2 | PreToolUse Bash hook never rewrites and never answers allow: a heavy unwrapped command is denied with a copyable `cgate run --max <est> -- '<cmd>'` suggestion; app unreachable → hook silent; busy/off are reported by `cgate run` itself | M
 | AGENT-3 | Already-wrapped commands pass through unchanged | M |
 | AGENT-4 | Auto pattern list (editable): pytest, xcodebuild, swift build/test, check.sh, pnpm/npm build/test, vitest, playwright, cargo build/test, docker build, make | M |
 | AGENT-5 | PreToolUse `"*"` hook: pending notice for session (stop, walltime, "slot ready (ticket X, held until HH:MM)") → deny once with notice text | M |
@@ -181,7 +181,7 @@ Auth: `getpeereid` / `LOCAL_PEERCRED` UID == console user UID (`SCDynamicStoreCo
 | 0 (`wait`) | Slot ready | `slot ready (ticket <id>, held until HH:MM): cgate run --ticket <id> --max ... -- <cmd>` |
 | 64 | Usage error | usage |
 
-Hook mode: busy/off → `permissionDecision: deny` with same text; match → `allow` + `updatedInput`; app unreachable → no output, exit 0 (fail-open).
+Hook mode: heavy unwrapped Bash → `permissionDecision: deny` with the `cgate run` suggestion; pending notice → deny once with notice text; never `allow`, never `updatedInput`; app unreachable → no output, exit 0 (fail-open).
 
 ## 5. Data model
 
@@ -196,7 +196,7 @@ Hook mode: busy/off → `permissionDecision: deny` with same text; match → `al
 | pid / pgid | Int32 | pgid = cgate's child group |
 | started_at | Date | |
 | max_runtime | Duration | ≤ 60 min |
-| auto_wrapped | Bool | hook vs explicit |
+| auto_wrapped | Bool | unused (hook no longer wraps); kept for protocol compat |
 | messaging_socket | String? | from env if present |
 | state | running / stopRequested / killing / done | stopRequested = soft stop or walltime |
 | stop_requested_at | Date? | walltime: kill at +60 s |
@@ -214,7 +214,7 @@ Hook mode: busy/off → `permissionDecision: deny` with same text; match → `al
 | pending_notices | [session_id: text] |
 | settings | patterns[], default_max (15 m), hard_cap (60 m) |
 
-Persisted: settings + enabled/slots (UserDefaults). Leases in memory; cgate re-registers on app restart via heartbeat failure → `acquire` retry (no kill).
+Persisted: settings + level/slots in `gate.json` (GateStore). Leases in memory; cgate re-registers on app restart via heartbeat failure → `acquire` retry (no kill).
 
 ### Fan state (fand)
 
@@ -231,7 +231,7 @@ Persisted: settings + enabled/slots (UserDefaults). Leases in memory; cgate re-r
 
 | Flow | Steps |
 |---|---|
-| Auto-wrap | Hook reads stdin → pattern match → not already wrapped → `updatedInput.command = cgate run --session <id> -- <cmd>` (other fields preserved) → allow |
+| Heavy command | Hook reads stdin → pattern match → not already `cgate` → deny with `cgate run --max <est> -- '<cmd>'` suggestion → agent re-issues wrapped (background). Fans always revert to Auto on app quit/crash/disconnect/10 s no heartbeat
 | Run granted | cgate `acquire` → granted → spawn child in new pgid → heartbeat 2 s → exit → `release` → exit with child code |
 | Run busy | `acquire` → busy → ticket issued → print ticket, position, ETA, `cgate wait` hint → exit 75 |
 | Ticket due | Slot frees → reserved 2 min for oldest ticket → `cgate wait` exits 0 (background task completes → agent re-invoked) + "slot ready" notice for `"*"` hook → agent `cgate run --ticket <id>`; unclaimed → expire, next ticket |
@@ -273,18 +273,18 @@ Sources/
   fand/              SMC, curve, watchdog, socket server
   cgate/             run / hook / status
 Tests/
-  SharedTests/  GateCoreTests/  fandTests/  cgateTests/
-plugin/
+  SharedTests/  GateCoreTests/  fandTests/  cgateTests/  ComputeManagerTests/
+Resources/          Info.plist, AppIcon.icns
+.claude-plugin/marketplace.json
+plugin/compute-gate/
   .claude-plugin/plugin.json
   hooks/hooks.json
   skills/compute-gate/SKILL.md
-  bin/cgate -> (symlink/installed)
-packaging/
-  com.computemanager.fand.plist
-  Info.plist
+packaging/launchd/   com.computemanager.fand.plist
 scripts/
-  check.sh  bundle.sh
-install.sh  uninstall.sh
+  check.sh  swiftw  build-lock.sh  bundle.sh
+  install.sh  uninstall.sh  install-cgate.sh
+docs/                builder-interfaces.md, claude-md-snippet.md
 spikes/              M0 throwaway (smc-probe, msg-probe)
 PLAN.md  TODO.md  CONVENTIONS.md
 ```
@@ -313,9 +313,9 @@ PLAN.md  TODO.md  CONVENTIONS.md
 - [x] (a) fails → dig deeper (O6: fan control is a must, no read-only fallback). Gate work proceeds regardless
 
 ### M1 — Foundations
-- [ ] SwiftPM skeleton (targets above)
-- [ ] Shared: fand protocol, gate protocol, cgate exit codes + output format
-- [ ] `scripts/check.sh`, `CONVENTIONS.md`
+- [x] SwiftPM skeleton (targets above)
+- [x] Shared: fand protocol, gate protocol, cgate exit codes + output format
+- [x] `scripts/check.sh`, `CONVENTIONS.md`
 
 ### M1 — Parallel packages
 

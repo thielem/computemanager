@@ -40,6 +40,7 @@ enum AppRuntime {
         // COMPUTEMANAGER_DEMO=1 (fand present, fake status) or =nofan (fand absent):
         // in-memory gate + fan, never persisted, never touching fans.
         if let demo = ProcessInfo.processInfo.environment["COMPUTEMANAGER_DEMO"] {
+            backend = nil  // don't serve the real gate on the real socket
             let fan = demo == "nofan"
                 ? FanViewModel(link: DemoFan(status: nil), socketPath: "/nonexistent")
                 : FanViewModel(link: DemoFan(status: DemoFan.sample))
@@ -61,22 +62,23 @@ enum AppRuntime {
     /// instance already serves the gate socket.
     static func launch() {
         let m = model
-        guard let service = backend else { return }
-        let srv = service.makeServer()
-        do {
-            try srv.start()
-        } catch SocketError.alreadyRunning {
-            let a = NSAlert()
-            a.messageText = "Compute Manager is already running"
-            a.alertStyle = .warning
-            NSApp.activate(ignoringOtherApps: true)
-            a.runModal()
-            NSApp.terminate(nil)
-            return
-        } catch {
-            NSLog("ComputeManager: gate socket failed: \(error)")
+        if let service = backend {
+            let srv = service.makeServer()
+            do {
+                try srv.start()
+            } catch SocketError.alreadyRunning {
+                let a = NSAlert()
+                a.messageText = "Compute Manager is already running"
+                a.alertStyle = .warning
+                NSApp.activate(ignoringOtherApps: true)
+                a.runModal()
+                NSApp.terminate(nil)
+                return
+            } catch {
+                NSLog("ComputeManager: gate socket failed: \(error)")
+            }
+            server = srv
         }
-        server = srv
         launched = true
         m.fan.start()
         Task { await m.gate.refresh() }

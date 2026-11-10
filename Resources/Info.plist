@@ -24,6 +24,8 @@
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>CMRepoPath</key>
+	<string></string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

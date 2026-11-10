@@ -24,7 +24,7 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Auto-wrap") {
+            Section("Heavy commands") {
                 TextEditor(text: $patterns)
                     .font(.system(.body, design: .monospaced))
                     .frame(minHeight: 180)

@@ -5,7 +5,7 @@
 | 1 | Quit other fan tools (Macs Fan Control, Stats fan control) so nothing fights over SMC | Before M0a | Done (Macs Fan Control quit) |
 | 2 | Run M0a probe once: `sudo spikes/smc-probe` (read → Max ≤10 s → Auto), report result | M0 | Open |
 | 3 | Install (order below) | After merge | Open |
-| 4 | Approve launch-at-login (System Settings → General → Login Items) | First app launch | Open |
+| 4 | Settings → Launch at login, then approve in System Settings → Login Items | First app launch | Open |
 | 5 | Confirm plugin name (O7) | Before package C | Done (`compute-gate`) |
 
 ## Install (in this order)

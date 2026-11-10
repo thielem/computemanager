@@ -1,11 +1,11 @@
 {
-  "description": "Compute gate: auto-wrap heavy Bash commands, deliver stop / slot-ready notices",
+  "description": "deny heavy unwrapped Bash commands; deliver gate notices",
   "hooks": {
     "PreToolUse": [
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "cgate hook", "timeout": 5 }
+          { "type": "command", "command": "\"$HOME/.local/bin/cgate\" hook 2>/dev/null || true", "timeout": 5 }
         ]
       }
     ]
