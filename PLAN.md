@@ -20,9 +20,10 @@
 | Slot | One permit for a concurrently running heavy run (default N=2) |
 | Heavy run | Command executed via `cgate run` (explicit or auto-wrapped by hook) |
 | Lease | Registry record of a heavy run holding a slot |
-| Walltime / max | Declared max runtime of a run; exceeded → killed |
-| Ticket | Reservation for a rejected session (O1) |
-| Stop notice | Message delivered to an agent session on Soft/Hard stop |
+| Walltime / max | Declared max runtime of a run; exceeded → soft stop, +60 s → hard stop |
+| Ticket | FIFO reservation for a rejected session: `{id, position, eta}` |
+| Stop notice | Message delivered to an agent session (soft/hard stop, walltime, slot ready) |
+| No more / Soft / Hard | Gate-off levels: slots := 0 / + ask agents to stop / + kill jobs |
 | fand | Root LaunchDaemon that talks to the SMC |
 | cgate | CLI used by hooks and agents to talk to the gate |
 | SMC | System Management Controller (fan/temperature keys) |
@@ -54,25 +55,28 @@ Priority: M = must, S = should, C = could.
 | GATE-2 | No blocking queue: no free slot → immediate busy response with queue position + ETA of next free slot | M |
 | GATE-3 | ETA = min over running leases of `started_at + max_runtime` | M |
 | GATE-4 | Every run has max runtime; default 15 min (configurable), hard cap 60 min | M |
-| GATE-5 | Walltime exceeded → SIGINT, SIGTERM, SIGKILL after 5 s grace, whole process group; print `killed: exceeded declared max runtime` | M |
+| GATE-5 | Walltime exceeded → soft stop for that job (notice to its agent); +60 s grace → hard stop (kill); cgate prints `killed: exceeded declared max runtime` | M |
 | GATE-6 | Lease held for process lifetime, released on exit; app reaps leases with dead pid | M |
-| GATE-7 | Gate off with running jobs → user picks No new / Soft stop / Hard stop | M |
-| GATE-8 | No new: running finish; new denied with "Compute gate off — continue without heavy runs or stop and report" | M |
-| GATE-9 | Soft stop: stop notice + deny new; running job SIGINT (O2) | M |
-| GATE-10 | Hard stop: stop notice + SIGTERM process group, SIGKILL after 5 s | M |
+| GATE-7 | Gate off with running jobs → user picks No more / Soft stop / Hard stop | M |
+| GATE-8 | No more: slots := 0; running jobs finish; new runs denied with "Compute gate off — continue without heavy runs or stop and report" | M |
+| GATE-9 | Soft stop: No more + stop notice to all agents with running jobs; NO signal to processes | M |
+| GATE-10 | Hard stop: No more + notice + SIGTERM process group, SIGKILL after 5 s | M |
 | GATE-11 | App not running → cgate allows everything, appends to fallback log | M |
-| GATE-12 | Reservation tickets: rejected session gets ticket; freed slot held 2 min for oldest ticket (O1) | S |
+| GATE-12 | FIFO tickets: rejected session gets `{id, position, eta}`; freed slot reserved 2 min for oldest ticket; unclaimed → expires, next ticket | M |
 | GATE-13 | Gate logic hosted in user-level app, never in root daemon | M |
 
 ### AGENT
 
 | ID | Requirement | Pri |
 |---|---|---|
-| AGENT-1 | `cgate run [--max <dur>] [--session <id>] -- <cmd>` | M |
+| AGENT-1 | `cgate run [--max <dur>] [--session <id>] [--ticket <id>] -- <cmd>` | M |
+| AGENT-1a | `cgate wait --ticket <id>`: blocks until slot reserved for ticket (exit 0, "slot ready, held until HH:MM — claim with `cgate run --ticket <id>`") or ticket expires (exit 79) | M |
+| AGENT-1b | Busy message tells agent to run `cgate wait --ticket <id>` in background; Claude Code's background-task completion re-invokes the agent | M |
 | AGENT-2 | PreToolUse Bash hook rewrites matching commands to `cgate run --session <id> -- <cmd>` via `updatedInput` + `permissionDecision: allow`; preserves `description`, `timeout`, `run_in_background` | M |
 | AGENT-3 | Already-wrapped commands pass through unchanged | M |
 | AGENT-4 | Auto pattern list (editable): pytest, xcodebuild, swift build/test, check.sh, pnpm/npm build/test, vitest, playwright, cargo build/test, docker build, make | M |
-| AGENT-5 | PreToolUse `"*"` hook: pending stop notice for session → deny once with notice text | M |
+| AGENT-5 | PreToolUse `"*"` hook: pending notice for session (stop, walltime, "slot ready (ticket X, held until HH:MM)") → deny once with notice text | M |
+| AGENT-5a | Skill tells agents to run heavy work in background (`run_in_background: true` + `cgate run ...`) so they keep making tool calls and see notices | M |
 | AGENT-6 | Session id: from hook stdin `session_id`; explicit runs fall back to parent-pid lookup, else `unknown` | M |
 | AGENT-7 | Hook latency ~ms; app unreachable → fail-open | M |
 | AGENT-8 | Claude Code plugin (user scope): hooks.json + skill `compute-gate` + cgate on PATH | M |
@@ -88,11 +92,11 @@ Priority: M = must, S = should, C = could.
 | UI-2 | Fan mode picker with temps + RPM | M |
 | UI-3 | Gate toggle + slots stepper | M |
 | UI-4 | Running jobs: project, command, session short id, elapsed / max, per-job kill | M |
-| UI-5 | Off-with-running-jobs prompt: No new / Soft stop / Hard stop | M |
+| UI-5 | Off-with-running-jobs prompt: No more / Soft stop / Hard stop | M |
 | UI-6 | Settings: pattern list, default/max runtime | M |
 | UI-7 | Launch at login (`SMAppService.mainApp`) | M |
 | UI-8 | Minimal text, native, compact | M |
-| UI-9 | "Meeting" preset: gate off (No new) + fans Auto (O3) | C |
+| UI-9 | "Meeting" preset, one click: gate No more + fans Auto | M |
 | UI-10 | Banner when fand not installed/unreachable | S |
 
 ### INST
@@ -156,9 +160,10 @@ Auth: `getpeereid` / `LOCAL_PEERCRED` UID == console user UID (`SCDynamicStoreCo
 
 | op | Caller | Purpose |
 |---|---|---|
-| `acquire` | cgate run | Request slot; returns `granted` + job_id, or `busy` (position, eta), or `off` (message) |
+| `acquire` | cgate run | Request slot (optional `ticket`); returns `granted` + job_id, `busy` (ticket id, position, eta), or `off` (message) |
 | `release` | cgate run | Free slot on exit (`exitCode`, `reason`) |
-| `heartbeat` | cgate run | Keep lease alive; response may carry `signal: int\|term` (soft/hard stop, UI kill) |
+| `heartbeat` | cgate run | Keep lease alive; response may carry `kill: true` (hard stop, walltime +60 s, UI kill) |
+| `wait` | cgate wait | Long-poll until ticket's slot reserved (`ready`, held_until) or `expired` |
 | `hookCheck` | cgate hook | Pending notice for session? → deny text or none |
 | `status` | cgate status, UI | Gate state + leases |
 | `setGate` | UI | on/off + stop choice, slots |
@@ -168,10 +173,12 @@ Auth: `getpeereid` / `LOCAL_PEERCRED` UID == console user UID (`SCDynamicStoreCo
 | Code | Meaning | Output (stderr, one line) |
 |---|---|---|
 | child's | Run completed | — |
-| 75 | Busy (no slot) | `compute busy: position <n>, next slot ~<eta>; do other work and retry` |
+| 75 | Busy (no slot) | `compute busy: ticket <id>, position <n>, next slot ~<eta>. Run in background: cgate wait --ticket <id>; do other work meanwhile` |
 | 76 | Gate off | `Compute gate off — continue without heavy runs or stop and report` |
 | 77 | Walltime kill | `killed: exceeded declared max runtime (<max>)` |
-| 78 | Stopped by user (soft/hard/kill) | `stopped by user: <mode>` |
+| 78 | Killed by user (hard stop / UI kill) | `killed by user: hard stop` |
+| 79 | Ticket expired (`wait`/`run --ticket`) | `ticket <id> expired; retry cgate run` |
+| 0 (`wait`) | Slot ready | `slot ready (ticket <id>, held until HH:MM): cgate run --ticket <id> --max ... -- <cmd>` |
 | 64 | Usage error | usage |
 
 Hook mode: busy/off → `permissionDecision: deny` with same text; match → `allow` + `updatedInput`; app unreachable → no output, exit 0 (fail-open).
@@ -191,7 +198,8 @@ Hook mode: busy/off → `permissionDecision: deny` with same text; match → `al
 | max_runtime | Duration | ≤ 60 min |
 | auto_wrapped | Bool | hook vs explicit |
 | messaging_socket | String? | from env if present |
-| state | running / stopping / done | |
+| state | running / stopRequested / killing / done | stopRequested = soft stop or walltime |
+| stop_requested_at | Date? | walltime: kill at +60 s |
 
 ### Gate state
 
@@ -199,10 +207,10 @@ Hook mode: busy/off → `permissionDecision: deny` with same text; match → `al
 |---|---|
 | enabled | Bool |
 | slots | Int (default 2) |
-| off_mode | none / noNew / soft / hard |
+| off_mode | none / noMore / soft / hard (off ⇒ effective slots 0) |
 | leases | [Lease] |
-| tickets | [{session_id, issued_at}] (O1) |
-| held_slot | {session_id, until}? (O1) |
+| tickets | FIFO [{id, session_id, issued_at}] (position/eta derived) |
+| held_slot | {ticket_id, until (now + 2 min)}? |
 | pending_notices | [session_id: text] |
 | settings | patterns[], default_max (15 m), hard_cap (60 m) |
 
@@ -225,12 +233,14 @@ Persisted: settings + enabled/slots (UserDefaults). Leases in memory; cgate re-r
 |---|---|
 | Auto-wrap | Hook reads stdin → pattern match → not already wrapped → `updatedInput.command = cgate run --session <id> -- <cmd>` (other fields preserved) → allow |
 | Run granted | cgate `acquire` → granted → spawn child in new pgid → heartbeat 2 s → exit → `release` → exit with child code |
-| Run busy | `acquire` → busy → print position + ETA → exit 75 (ticket issued, O1) |
-| Walltime | Timer at max → SIGINT pg → +5 s SIGTERM → +5 s SIGKILL → print kill line → exit 77 |
-| Gate off: No new | `enabled=false`; running continue; new `acquire` → off (76) |
-| Gate off: Soft | + notice queued per running session; leases signalled SIGINT (O2) via heartbeat response |
-| Gate off: Hard | + notice; SIGTERM pg, SIGKILL after 5 s |
-| Notice delivery | Next tool call → `"*"` hook `hookCheck` → deny once with notice text → notice cleared |
+| Run busy | `acquire` → busy → ticket issued → print ticket, position, ETA, `cgate wait` hint → exit 75 |
+| Ticket due | Slot frees → reserved 2 min for oldest ticket → `cgate wait` exits 0 (background task completes → agent re-invoked) + "slot ready" notice for `"*"` hook → agent `cgate run --ticket <id>`; unclaimed → expire, next ticket |
+| Walltime | At max → notice to job's session ("exceeded max runtime, stop it") → +60 s → SIGTERM pg, +5 s SIGKILL → exit 77 |
+| Gate off: No more | slots := 0; running continue; new `acquire` → off (76) |
+| Gate off: Soft | No more + stop notice queued per session with running jobs; no signals |
+| Gate off: Hard | No more + notice; SIGTERM pg, SIGKILL after 5 s → exit 78 |
+| Meeting preset | Gate No more + fand `setMode auto` |
+| Notice delivery | Next tool call → `"*"` hook `hookCheck` → deny once with notice text → notice cleared. Caveat: agent sees it only between tool calls; a foreground `cgate run` blocks it until exit → skill mandates background runs |
 | App down | cgate connect fails → allow, append to `~/Library/Logs/ComputeManager/cgate-fallback.log` |
 | Fan mode set | UI → `setMode` → fand: `Ftst=1`, `F*Md=1`, `F*Tg` per tick |
 | Fan safety | No heartbeat 10 s / SIGTERM / start / app quit → `F*Md=0`, `Ftst=0` |
@@ -292,15 +302,15 @@ PLAN.md  TODO.md  CONVENTIONS.md
 | Target clamp | `F{n}Tg` clamped to `[F{n}Mn, F{n}Mx]` |
 | Input validation | Max line length, schema-checked JSON, version field |
 | Fail-open gate | Gate never blocks the user's own work when app is down |
-| Process kills | Only pgids of cgate-spawned children; never arbitrary pids |
+| Process kills | Only pgids of cgate-spawned children, only on hard stop / walltime+60 s / UI kill |
 | Install | Root files owned root:wheel, 0755/0644; uninstall removes all |
 
 ## 10. Milestones
 
 ### M0 — Spikes
-- [ ] (a) Root CLI `spikes/smc-probe`: read FNum/F0Ac/F0Mn/F0Mx; write `Ftst=1`, `F0Md=1`, `F0Tg`; verify RPM changes; restore Auto (`F0Md=0`, `Ftst=0`) on macOS 27.0.1
+- [ ] (a) Minimal root CLI `spikes/smc-probe` (user runs it once, no curve tests, no repeats): read fans → Max ≤10 s → read RPM → restore Auto (`F*Md=0`, `Ftst=0`)
 - [ ] (b) Probe `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN` from a Bash child: wire format, delivery timing
-- [ ] Report; (a) fails → back to user (O6); gate work proceeds anyway
+- [ ] (a) fails → back to user (O6); otherwise continue. Gate work proceeds regardless
 
 ### M1 — Foundations
 - [ ] SwiftPM skeleton (targets above)
@@ -313,20 +323,18 @@ PLAN.md  TODO.md  CONVENTIONS.md
 |---|---|
 | A | fand (SMC, temps, curve, watchdog, wake, peer auth) + install.sh / uninstall.sh + LaunchDaemon plist |
 | B | Menu bar app UI (fan picker, gate toggle, slots, jobs list, stop prompt, settings, login item) + bundle.sh |
-| C | GateCore (state machine, leases, ETA, tickets, notices, reaper, socket server lib used by app) + cgate CLI + hooks + plugin + skill |
+| C | GateCore (state machine, leases, ETA, tickets, notices, reaper, socket server lib used by app) + cgate CLI (`run`/`wait`/`hook`/`status`) + hooks + plugin + skill |
 
 ### M2 — Integration & verification
 - [ ] Wire app ↔ GateCore ↔ fand
 - [ ] Review loop (max 2 rounds)
-- [ ] E2E with real Claude Code session: busy feedback, walltime kill, soft stop, hard stop, notice delivery, fan revert on app quit/kill -9
+- [ ] E2E with real Claude Code session: busy feedback + ticket wake-up, walltime soft→hard, soft stop, hard stop, notice delivery, fan revert on app quit/kill -9
+
+Process: continue past M0 unless fan writes fail; status updates in chat only, no waiting.
 
 ## 11. Open decisions
 
 | # | Decision | Default |
 |---|---|---|
-| O1 | Reservation tickets (slot held 2 min for oldest rejected session) | Implement (S) |
-| O2 | Soft stop also SIGINTs running job | Yes (test runners exit cleanly) |
-| O3 | "Meeting" preset (gate off/No new + fans Auto) | Add if cheap (C) |
-| O4 | Scope: stop after M0 for review, or continue | Continue unless M0a fails |
-| O5 | Check-in style | Status updates, no waiting |
-| O6 | Fan writes don't work on macOS 27 | Ship gate only; fan section read-only |
+| O6 | Fan writes don't work on macOS 27 | Back to user; ship gate only, fan section read-only |
+| O7 | Plugin name | `compute-gate` |
