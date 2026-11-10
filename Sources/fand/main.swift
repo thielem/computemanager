@@ -1,23 +1,22 @@
 import Foundation
 import Shared
 
-// fand placeholder: serves fand.sock answering `notImplemented`. Owner: package A.
-// Does NOT touch the SMC.
+// fand: root LaunchDaemon owning the SMC fan keys. See Daemon.swift / FanController.swift.
+//   fand                 run the daemon (root)
+//   fand --print-status  read-only fans/temps as JSON (unprivileged OK, no SMC writes)
+//   fand --revert-auto   one-shot: all fans back to Apple control (root)
+//   fand --version
 
-func handle(_ request: FanRequest) async -> Result<FanReply, WireError> {
-    .failure(.notImplemented(request.op))
+switch CommandLine.arguments.dropFirst().first {
+case "--version":
+    print("fand protocol v\(ProtocolVersion.fand)")
+case "--print-status":
+    exit(OneShot.printStatus())
+case "--revert-auto":
+    exit(OneShot.revertAuto())
+case nil:
+    Daemon().run()
+case let other?:
+    FileHandle.standardError.write(Data("fand: unknown argument \(other)\nusage: fand [--print-status | --revert-auto | --version]\n".utf8))
+    exit(64)
 }
-
-if CommandLine.arguments.contains("--version") {
-    print("fand (placeholder) protocol v\(ProtocolVersion.fand)")
-    exit(0)
-}
-
-let server = FanServer(path: Paths.fandSocket) { req, _ in await handle(req) }
-do {
-    try server.start(mode: 0o666)
-} catch {
-    FileHandle.standardError.write(Data("fand: \(error)\n".utf8))
-    exit(1)
-}
-dispatchMain()
