@@ -33,6 +33,9 @@ public final class GateService: @unchecked Sendable {  // all mutable state guar
     /// `kill(-pgid, sig)`.
     private let signalGroup: @Sendable (Int32, Int32) -> Int32
     private let killGrace: TimeInterval
+    private let isStopped: @Sendable (Int32) -> Bool
+    /// Process start time (identity check against pid reuse); nil if no such process.
+    private let startTime: @Sendable (Int32) -> UInt64?
     private let pusher: NoticePusher
     private let pollWindow: TimeInterval
     private let pollStep: TimeInterval
@@ -49,12 +52,16 @@ public final class GateService: @unchecked Sendable {  // all mutable state guar
          isAlive: @escaping @Sendable (Int32) -> Bool, pusher: NoticePusher,
          pollWindow: TimeInterval, pollStep: TimeInterval = 0.2, autoTick: Bool,
          signalGroup: @escaping @Sendable (Int32, Int32) -> Int32 = { kill(-$0, $1) },
-         killGrace: TimeInterval = Defaults.killGrace) {
+         killGrace: TimeInterval = Defaults.killGrace,
+         isStopped: @escaping @Sendable (Int32) -> Bool = GateService.pidStopped,
+         startTime: @escaping @Sendable (Int32) -> UInt64? = GateService.pidStartTime) {
         machine = GateMachine(settings: settings, level: level)
         self.clock = clock
         self.isAlive = isAlive
         self.signalGroup = signalGroup
         self.killGrace = killGrace
+        self.isStopped = isStopped
+        self.startTime = startTime
         self.pusher = pusher
         self.pollWindow = pollWindow
         self.pollStep = pollStep
@@ -172,17 +179,20 @@ public final class GateService: @unchecked Sendable {  // all mutable state guar
         }
         guard let pids = due else { return }
         let dead = Set(pids.filter { !isAlive($0) })
-        let gone = mutate { $0.reap(dead: dead, now: $1) }
+        let stopped = Set(pids.filter { !dead.contains($0) && isStopped($0) })
+        let gone = mutate { $0.reap(dead: dead, stopped: stopped, now: $1) }
         killGroups(gone.compactMap(\.pgid))
     }
 
-    /// Orphaned process groups of reaped leases: SIGTERM, SIGKILL after `killGrace` if alive.
+    /// Orphaned process groups of reaped leases: SIGTERM, SIGKILL after `killGrace` if the group
+    /// still exists and its leader is the same process (start time unchanged; pid reuse guard).
     private func killGroups(_ pgids: [Int32]) {
-        let signalGroup = signalGroup
+        let (signalGroup, startTime) = (signalGroup, startTime)
         for g in pgids where g > 1 && g != getpgrp() && signalGroup(g, 0) == 0 {
+            let leader = startTime(g)
             _ = signalGroup(g, SIGTERM)
             DispatchQueue.global().asyncAfter(deadline: .now() + killGrace) {
-                if signalGroup(g, 0) == 0 { _ = signalGroup(g, SIGKILL) }
+                if signalGroup(g, 0) == 0 && startTime(g) == leader { _ = signalGroup(g, SIGKILL) }
             }
         }
     }
@@ -197,5 +207,18 @@ public final class GateService: @unchecked Sendable {  // all mutable state guar
 
     static let pidAlive: @Sendable (Int32) -> Bool = { pid in
         pid > 0 && (kill(pid, 0) == 0 || errno == EPERM)
+    }
+
+    static func bsdInfo(_ pid: Int32) -> proc_bsdinfo? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard pid > 0, proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return info
+    }
+
+    static let pidStopped: @Sendable (Int32) -> Bool = { bsdInfo($0)?.pbi_status == UInt32(SSTOP) }
+
+    static let pidStartTime: @Sendable (Int32) -> UInt64? = { pid in
+        bsdInfo(pid).map { $0.pbi_start_tvsec &* 1_000_000 &+ $0.pbi_start_tvusec }
     }
 }

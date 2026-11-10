@@ -132,6 +132,14 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         }
     }
 
+    @Test func signalAfterChildExitIsNotRecorded() {
+        let f = Forwarder(grace: 0.2)
+        f.started(999_999)
+        f.markExited()
+        f.forward(SIGINT)
+        #expect(f.signal == nil)
+    }
+
     @Test func shellChoice() {
         #expect(Runner.shell(["SHELL": "/bin/zsh"]) == "/bin/zsh")
         #expect(Runner.shell(["SHELL": "/opt/homebrew/bin/bash"]) == "/opt/homebrew/bin/bash")

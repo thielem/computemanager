@@ -225,8 +225,9 @@ final class Forwarder: @unchecked Sendable {  // guarded by lock
 
     func forward(_ s: Int32) {
         let p: pid_t? = lock.withLock {
+            guard !exited else { return nil }  // only signals that reached a running child count
             if sig == nil { sig = s }
-            return exited ? nil : pid
+            return pid
         }
         if let p { send(s, to: p) }
     }

@@ -272,9 +272,11 @@ struct GateMachine: Sendable {
     }
 
     /// Remove leases whose cgate pid is dead (GATE-6) or that sent no heartbeat for
-    /// `heartbeatTimeout`. Returns the removed leases (the service kills their pgids).
+    /// `heartbeatTimeout`. A `stopped` cgate (SIGSTOP/Ctrl-Z/debugger) is exempt from the silence
+    /// rule and counts as seen now. Returns the removed leases (the service kills their pgids).
     @discardableResult
-    mutating func reap(dead: Set<Int32>, now: Date) -> [Lease] {
+    mutating func reap(dead: Set<Int32>, stopped: Set<Int32> = [], now: Date) -> [Lease] {
+        for l in leases where stopped.contains(l.pid) { lastSeen[l.jobId] = now }
         let gone = leases.filter { l in
             dead.contains(l.pid) || now.timeIntervalSince(lastSeen[l.jobId] ?? now) > Self.heartbeatTimeout
         }

@@ -37,7 +37,9 @@ final class MBox {
     func killJob(_ id: UUID, now: Date) -> Bool { m.killJob(id, now: now) }
     func release(_ id: UUID, now: Date) { m.release(id, now: now) }
     func advance(now: Date) { m.advance(now: now) }
-    @discardableResult func reap(dead: Set<Int32>, now: Date) -> [Lease] { m.reap(dead: dead, now: now) }
+    @discardableResult func reap(dead: Set<Int32>, stopped: Set<Int32> = [], now: Date) -> [Lease] {
+        m.reap(dead: dead, stopped: stopped, now: now)
+    }
     func meeting(now: Date) { m.meeting(now: now) }
     func endWait(_ id: String, now: Date) { m.endWait(id, now: now) }
     func setGate(_ l: GateLevel, slots: Int?, now: Date) { m.setGate(l, slots: slots, now: now) }
@@ -94,6 +96,14 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
         let gone = m.reap(dead: [], now: t0 + 31)
         #expect(gone.map(\.pid) == [12] && m.leases.map(\.pid) == [11])
         #expect(m.reap(dead: [], now: t0 + 51).map(\.pgid) == [77])
+    }
+
+    @Test func stoppedCgateIsNotReapedForSilence() {
+        let m = machine()
+        _ = m.acquire(req("a", pid: 11), now: t0)
+        #expect(m.reap(dead: [], stopped: [11], now: t0 + 100).isEmpty)
+        #expect(m.reap(dead: [], now: t0 + 120).isEmpty)  // counted as seen at the stopped reap
+        #expect(m.reap(dead: [11], stopped: [11], now: t0 + 121).map(\.pid) == [11])  // dead still reaped
     }
 }
 

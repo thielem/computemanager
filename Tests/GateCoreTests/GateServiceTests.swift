@@ -179,6 +179,56 @@ func spawnGroup(_ script: String) -> pid_t {
         #expect(waitUntil { signals.all == ["4242:0", "4242:\(SIGTERM)", "4242:0", "4242:\(SIGKILL)"] })
     }
 
+    @Test func stoppedCgateKeepsItsLease() async throws {
+        let clock = FakeClock(t0)
+        let stopped = Recorder<Bool>()
+        stopped.add(true)
+        let svc = GateService(settings: GateSettings(slots: 2), level: .on, clock: { clock.now },
+                              isAlive: { _ in true }, pusher: .none, pollWindow: 0.5, autoTick: false,
+                              signalGroup: { _, _ in -1 }, isStopped: { _ in stopped.all.last! })
+        _ = await svc.handle(.acquire(req("a", pid: 1)))
+        clock.advance(100)
+        svc.tick()
+        guard case .success(.status(let s1)) = await svc.handle(.status) else { Issue.record(); return }
+        #expect(s1.leases.count == 1)
+        stopped.add(false)
+        clock.advance(31)
+        svc.tick()
+        guard case .success(.status(let s2)) = await svc.handle(.status) else { Issue.record(); return }
+        #expect(s2.leases.isEmpty)
+    }
+
+    @Test func noSigkillWhenGroupLeaderChanged() async throws {
+        let clock = FakeClock(t0)
+        let signals = Recorder<String>()
+        let starts = Recorder<UInt64>()
+        starts.add(1)
+        let svc = GateService(settings: GateSettings(slots: 2), level: .on, clock: { clock.now },
+                              isAlive: { $0 != 666 }, pusher: .none, pollWindow: 0.5, autoTick: false,
+                              signalGroup: { g, s in
+                                  signals.add("\(g):\(s)")
+                                  if s == SIGTERM { starts.add(2) }  // pid reused during the grace
+                                  return 0
+                              }, killGrace: 0.05, startTime: { _ in starts.all.last })
+        _ = await svc.handle(.acquire(req("a", pid: 666)))
+        let id = try #require(await leaseId(svc, pid: 666))
+        _ = await svc.handle(.heartbeat(JobHeartbeatRequest(jobId: id, pgid: 4242)))
+        svc.tick()
+        usleep(300_000)
+        #expect(signals.all == ["4242:0", "4242:\(SIGTERM)", "4242:0"])
+    }
+
+    @Test func realProbesSeeStoppedProcessAndStartTime() {
+        let g = spawnGroup("sleep 30")
+        defer { kill(-g, SIGKILL) }
+        #expect(waitUntil { GateService.pidStartTime(g) != nil })
+        #expect(!GateService.pidStopped(g))
+        kill(g, SIGSTOP)
+        #expect(waitUntil { GateService.pidStopped(g) })
+        #expect(GateService.pidStartTime(g) == GateService.pidStartTime(g))
+        #expect(GateService.pidStartTime(-1) == nil)
+    }
+
     @Test func tickDuringGraceDoesNotFireOnChange() async throws {
         let clock = FakeClock(t0)
         let svc = makeService(clock: clock)
