@@ -22,19 +22,28 @@ struct Push: Sendable, Equatable {
 }
 
 /// Pure gate state machine (PLAN §2 GATE, §5, §6). No I/O, no clock: every mutating call gets
-/// `now`. Invariant: the held ticket (if any) is `tickets.first`.
+/// `now`. Invariant: held tickets are a prefix of `tickets` (holds go to the oldest tickets).
 struct GateMachine: Sendable {
     static let unknownSession = "unknown"
+    /// A lease without heartbeat for this long is reaped (cgate hung or gone).
+    static let heartbeatTimeout: TimeInterval = 30
+    /// A `cgate wait` counts as waiting this long after its poll ends (reconnect gap).
+    static let waiterLinger: TimeInterval = 1
 
     var level: GateLevel
     var settings: GateSettings
     var leases: [Lease] = []
-    /// FIFO; `held` (if set) refers to `tickets.first`.
+    /// FIFO; `held` covers its first `held.count` entries.
     var tickets: [Ticket] = []
-    var held: HeldSlot?
+    /// One hold per free slot, for the oldest tickets (each with its own expiry).
+    var held: [HeldSlot] = []
     var notices: [Notice] = []
     /// Active `waitTicket` long-polls per ticket id (no slot-ready notice/push while waited on).
     var waiters: [String: Int] = [:]
+    /// Ended `waitTicket` polls still count as waiting until this time (L5).
+    var waitLinger: [String: Date] = [:]
+    /// Last heartbeat (or grant) per job.
+    var lastSeen: [UUID: Date] = [:]
     /// Last messaging socket seen per session (from `acquire`).
     var sessionSockets: [String: String] = [:]
     /// Pushes produced since the last drain.
@@ -50,26 +59,28 @@ struct GateMachine: Sendable {
 
     var effectiveSlots: Int { level == .on ? settings.slots : 0 }
     /// Slots neither leased nor held (negative when over-committed, e.g. after reattach).
-    var freeSlots: Int { effectiveSlots - leases.count - (held == nil ? 0 : 1) }
+    var freeSlots: Int { effectiveSlots - leases.count - held.count }
     /// Tickets waiting without a held slot.
-    var queuedTickets: ArraySlice<Ticket> { held == nil ? tickets[...] : tickets.dropFirst() }
+    var queuedTickets: ArraySlice<Ticket> { tickets.dropFirst(held.count) }
 
-    /// Lease deadlines (≥ now), ascending.
-    private func deadlines(_ now: Date) -> [Date] {
-        leases.map { max($0.deadline, now) }.sorted()
-    }
+    func hold(of id: String) -> HeldSlot? { held.first { $0.ticketId == id } }
+
+    /// Raw lease deadlines, ascending (not clamped to now, so ETAs stay stable per tick).
+    private var deadlines: [Date] { leases.map(\.deadline).sorted() }
 
     func nextSlotETA(_ now: Date) -> Date? {
-        level.isOff ? nil : deadlines(now).first
+        level.isOff ? nil : deadlines.first
     }
 
-    /// Position 1-based in the FIFO. ETA: held → now; queued #j (0-based, excl. held) →
-    /// j-th smallest lease deadline, wrapping around with `defaultMax` per extra round.
+    /// Position 1-based in the FIFO. ETA: held → when the hold started; queued #j (0-based,
+    /// excl. held) → j-th smallest lease deadline, wrapping around with `defaultMax` per round.
     func ticketInfo(_ id: String, now: Date) -> TicketInfo? {
         guard let i = tickets.firstIndex(where: { $0.id == id }) else { return nil }
-        if held?.ticketId == id { return TicketInfo(id: id, position: 1, eta: now) }
-        let j = i - (held == nil ? 0 : 1)
-        let d = deadlines(now)
+        if let h = hold(of: id) {
+            return TicketInfo(id: id, position: i + 1, eta: h.until.addingTimeInterval(-Defaults.ticketHold))
+        }
+        let j = i - held.count
+        let d = deadlines
         var eta: Date?
         if !level.isOff, !d.isEmpty {
             eta = d[j % d.count].addingTimeInterval(Double(j / d.count) * settings.defaultMaxRuntimeSeconds)
@@ -80,7 +91,7 @@ struct GateMachine: Sendable {
     func snapshot(now: Date) -> GateStatus {
         GateStatus(level: level, slots: settings.slots, effectiveSlots: effectiveSlots,
                    leases: leases, tickets: tickets.compactMap { ticketInfo($0.id, now: now) },
-                   heldSlot: held, nextSlotETA: nextSlotETA(now),
+                   heldSlot: held.first, nextSlotETA: nextSlotETA(now),
                    pendingNotices: notices.map { PendingNotice(sessionId: $0.sessionId, text: $0.text) },
                    settings: settings)
     }
@@ -106,25 +117,36 @@ struct GateMachine: Sendable {
         promote(now: now)
     }
 
-    /// Expire an unclaimed hold; hold a free slot for the oldest ticket.
+    /// Expire unclaimed holds; hold one free slot per queued ticket, oldest first.
     mutating func promote(now: Date) {
-        if let h = held, now >= h.until {
-            drop(ticket: h.ticketId)
+        for h in held where now >= h.until { drop(ticket: h.ticketId) }
+        waitLinger = waitLinger.filter { $0.value > now }
+        if level.isOff { held = [] }  // tickets keep their place
+        while freeSlots > 0, let next = queuedTickets.first {
+            let until = now.addingTimeInterval(Defaults.ticketHold)
+            held.append(HeldSlot(ticketId: next.id, until: until))
+            if !isWaited(next.id, now: now) {
+                notify(next.sessionId, CgateMessage.slotReady(ticket: next.id, heldUntil: until),
+                       kind: .slotReady(ticket: next.id), socket: next.socket(in: self))
+            }
         }
-        if level.isOff { held = nil }  // ticket keeps its place at the front
-        guard held == nil, let first = tickets.first, freeSlots > 0 else { return }
-        let until = now.addingTimeInterval(Defaults.ticketHold)
-        held = HeldSlot(ticketId: first.id, until: until)
-        if waiters[first.id, default: 0] == 0 {
-            notify(first.sessionId, CgateMessage.slotReady(ticket: first.id, heldUntil: until),
-                   kind: .slotReady(ticket: first.id), socket: first.socket(in: self))
-        }
+    }
+
+    func isWaited(_ id: String, now: Date) -> Bool {
+        waiters[id, default: 0] > 0 || (waitLinger[id].map { now < $0 } ?? false)
+    }
+
+    /// A `waitTicket` poll ended; it still counts as waiting for `waiterLinger`.
+    mutating func endWait(_ id: String, now: Date) {
+        waiters[id, default: 1] -= 1
+        if waiters[id] == 0 { waiters[id] = nil }
+        waitLinger[id] = now.addingTimeInterval(Self.waiterLinger)
     }
 
     private mutating func drop(ticket id: String) {
         tickets.removeAll { $0.id == id }
         notices.removeAll { $0.kind == .slotReady(ticket: id) }
-        if held?.ticketId == id { held = nil }
+        held.removeAll { $0.ticketId == id }
     }
 
     // MARK: Ops
@@ -134,10 +156,12 @@ struct GateMachine: Sendable {
         if let s = r.messagingSocket, r.sessionId != Self.unknownSession { sessionSockets[r.sessionId] = s }
         if let re = r.reattach {
             if let l = leases.first(where: { $0.jobId == re.jobId }) {
+                lastSeen[l.jobId] = now
                 return .granted(jobId: l.jobId, maxRuntimeSeconds: l.maxRuntimeSeconds)
             }
             let max = effectiveMax(r.maxRuntimeSeconds)
             leases.append(makeLease(r, id: re.jobId, start: re.startedAt, max: max))
+            lastSeen[re.jobId] = now
             applyLevel(toLeaseAt: leases.count - 1)
             advance(now: now)
             return .granted(jobId: re.jobId, maxRuntimeSeconds: max)
@@ -145,12 +169,14 @@ struct GateMachine: Sendable {
         guard !level.isOff else { return .off(message: CgateMessage.gateOff) }
 
         if let t = r.ticket {
-            if held?.ticketId == t { return grant(r, consuming: t, now: now) }
+            if hold(of: t) != nil || (queuedTickets.first?.id == t && freeSlots > 0) {
+                return grant(r, consuming: t, now: now)
+            }
             if let info = ticketInfo(t, now: now) { return .busy(info) }
             return .ticketExpired(ticket: t)
         }
         if let own = ownTicket(session: r.sessionId, cwd: r.cwd) {
-            if held?.ticketId == own.id { return grant(r, consuming: own.id, now: now) }
+            if hold(of: own.id) != nil { return grant(r, consuming: own.id, now: now) }
             return .busy(ticketInfo(own.id, now: now)!)
         }
         if queuedTickets.isEmpty, freeSlots > 0 { return grant(r, consuming: nil, now: now) }
@@ -159,12 +185,14 @@ struct GateMachine: Sendable {
 
     mutating func release(_ jobId: UUID, now: Date) {
         leases.removeAll { $0.jobId == jobId }
+        lastSeen[jobId] = nil
         advance(now: now)
     }
 
     mutating func heartbeat(_ r: JobHeartbeatRequest, now: Date) -> HeartbeatDirective {
         advance(now: now)
         guard let i = leases.firstIndex(where: { $0.jobId == r.jobId }) else { return .unknownJob }
+        lastSeen[r.jobId] = now
         if let p = r.pgid { leases[i].pgid = p }
         switch leases[i].state {
         case .killing: return .hardStop(reason: leases[i].stopReason ?? .userKill)
@@ -187,26 +215,17 @@ struct GateMachine: Sendable {
             notices.removeAll { $0.sessionId == r.sessionId }
             return .notice(text: mine.map(\.text).joined(separator: "\n"))
         }
+        // K1 (user decision): never rewrite, never allow; heavy unwrapped Bash → deny with the
+        // exact `cgate run` line to use. Busy / gate off is reported by `cgate run` itself.
         guard r.toolName == "Bash", let cmd = r.command, !CommandMatcher.isWrapped(cmd),
               CommandMatcher.matches(cmd, patterns: settings.patterns) else { return .allow }
-        guard !level.isOff else { return .deny(reason: CgateMessage.gateOff) }
-        let cwd = r.cwd ?? ""
-        if let own = ownTicket(session: r.sessionId, cwd: cwd) {
-            if held?.ticketId == own.id {
-                return .wrap(newCommand: CommandMatcher.wrap(cmd, sessionId: r.sessionId, ticket: own.id))
-            }
-            return .deny(reason: CgateMessage.busy(ticketInfo(own.id, now: now)!))
-        }
-        if queuedTickets.isEmpty, freeSlots > 0 {
-            return .wrap(newCommand: CommandMatcher.wrap(cmd, sessionId: r.sessionId, ticket: nil))
-        }
-        return .deny(reason: CgateMessage.busy(issueTicket(session: r.sessionId, cwd: cwd, now: now)))
+        return .deny(reason: CommandMatcher.redirect(cmd))
     }
 
     /// Long-poll step for `waitTicket`. `ready` also clears the slot-ready notice.
     mutating func waitStatus(_ id: String, now: Date) -> WaitTicketResult {
         advance(now: now)
-        if let h = held, h.ticketId == id {
+        if let h = hold(of: id) {
             notices.removeAll { $0.kind == .slotReady(ticket: id) }
             return .ready(ticket: id, heldUntil: h.until)
         }
@@ -218,6 +237,7 @@ struct GateMachine: Sendable {
         if let slots { settings.slots = Self.clampSlots(slots) }
         self.level = level
         if level == .on {
+            notices.removeAll { $0.text == CgateMessage.softStopNotice }
             for i in leases.indices where leases[i].state == .stopRequested && leases[i].stopReason == .userSoftStop {
                 leases[i].state = .running
                 leases[i].stopReason = nil
@@ -226,6 +246,11 @@ struct GateMachine: Sendable {
         }
         for i in leases.indices { applyLevel(toLeaseAt: i) }
         advance(now: now)
+    }
+
+    /// Meeting started: on → noMore; never softens softStop/hardStop (or touches noMore).
+    mutating func meeting(now: Date) {
+        if level == .on { setGate(.noMore, slots: nil, now: now) } else { advance(now: now) }
     }
 
     /// False if the job is unknown.
@@ -246,10 +271,23 @@ struct GateMachine: Sendable {
         advance(now: now)
     }
 
-    /// Remove leases whose cgate pid is dead (GATE-6).
-    mutating func reap(dead: Set<Int32>, now: Date) {
-        leases.removeAll { dead.contains($0.pid) }
+    /// Remove leases whose cgate pid is dead (GATE-6) or that sent no heartbeat for
+    /// `heartbeatTimeout`. Returns the removed leases (the service kills their pgids).
+    @discardableResult
+    mutating func reap(dead: Set<Int32>, now: Date) -> [Lease] {
+        let gone = leases.filter { l in
+            dead.contains(l.pid) || now.timeIntervalSince(lastSeen[l.jobId] ?? now) > Self.heartbeatTimeout
+        }
+        let ids = Set(gone.map(\.jobId))
+        leases.removeAll { ids.contains($0.jobId) }
+        ids.forEach { lastSeen[$0] = nil }
         advance(now: now)
+        return gone
+    }
+
+    /// Treat every lease as just seen (after system sleep nobody could heartbeat).
+    mutating func touchAll(now: Date) {
+        for l in leases { lastSeen[l.jobId] = now }
     }
 
     // MARK: Helpers
@@ -303,6 +341,7 @@ struct GateMachine: Sendable {
         let max = effectiveMax(r.maxRuntimeSeconds)
         let lease = makeLease(r, id: UUID(), start: now, max: max)
         leases.append(lease)
+        lastSeen[lease.jobId] = now
         promote(now: now)
         return .granted(jobId: lease.jobId, maxRuntimeSeconds: max)
     }

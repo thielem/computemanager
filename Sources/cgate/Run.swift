@@ -26,18 +26,20 @@ struct RunContext: Sendable {
 /// `heartbeatInterval`, obey directives (softStop: print notice once; hardStop: SIGTERM pgid,
 /// SIGKILL after `killGrace`, exit 77/78; unknownJob: reattach), release on exit, exit with the
 /// child's code. busy 75 / off 76 / ticketExpired 79. App unreachable → run ungated and append
-/// to the fallback log. A single argument after `--` is run via `$SHELL -c` (that is how the
-/// hook wraps whole command lines); several arguments are exec'd directly.
+/// to the fallback log. A single argument after `--` is a shell line run via `$SHELL -c`
+/// (`$SHELL` only if bash/zsh/sh, else /bin/bash); several arguments are an argv, exec'd
+/// directly. After the child exits, a killed (hard stop / walltime / killJob) or interrupted
+/// run's whole process group gets SIGKILL, so TERM-ignoring grandchildren die too.
+/// Forwarded SIGINT/SIGTERM/SIGHUP escalate to SIGKILL after `killGrace`; exit 128 + signal.
 enum Runner {
     static func run(_ o: RunOptions, _ ctx: RunContext) -> Int32 {
         let session = o.session ?? SessionLookup.resolve(env: ctx.env)
         let single = o.command.count == 1
         let text = single ? o.command[0] : o.command.map(shellQuote).joined(separator: " ")
-        let shell = ctx.env["SHELL"].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? "/bin/sh"
-        let argv = single ? [shell, "-c", o.command[0]] : o.command
+        let argv = single ? [shell(ctx.env), "-c", o.command[0]] : o.command
         let acq = AcquireRequest(sessionId: session, cwd: ctx.cwd, command: text, pid: getpid(),
                                  maxRuntimeSeconds: o.maxRuntime, ticket: o.ticket,
-                                 autoWrapped: o.session != nil,  // only the hook passes --session
+                                 autoWrapped: false,  // K1: the hook never wraps
                                  messagingSocket: ctx.env[ClaudeMessaging.socketEnv])
 
         var job: (id: UUID, max: TimeInterval, startedAt: Date)?
@@ -57,6 +59,20 @@ enum Runner {
             logUngated(ctx, session: session, command: text)
         }
 
+        // Signal handlers before spawn (L3); the forwarder kills once the pid is known.
+        let fwd = Forwarder(grace: ctx.killGrace)
+        var signalSources: [DispatchSourceSignal] = []
+        if ctx.forwardSignals {
+            for sig in [SIGINT, SIGTERM, SIGHUP] {
+                signal(sig, SIG_IGN)
+                let s = DispatchSource.makeSignalSource(signal: sig, queue: .global())
+                s.setEventHandler { fwd.forward(sig) }
+                s.resume()
+                signalSources.append(s)
+            }
+        }
+        defer { signalSources.forEach { $0.cancel() } }
+
         guard let pid = spawn(argv, env: ctx.env) else {
             ctx.stderr("cgate: cannot run \(argv[0])")
             if let job { _ = try? ctx.link.call(.release(ReleaseRequest(jobId: job.id, exitCode: nil, reason: .spawnFailed))) }
@@ -68,19 +84,10 @@ enum Runner {
             var st: Int32 = 0
             while waitpid(pid, &st, 0) == -1 && errno == EINTR {}
             box.set(st)
+            fwd.markExited()
             exited.signal()
         }
-        let interrupted = Flag()
-        var signalSources: [DispatchSourceSignal] = []
-        if ctx.forwardSignals {
-            for sig in [SIGINT, SIGTERM, SIGHUP] {
-                signal(sig, SIG_IGN)
-                let s = DispatchSource.makeSignalSource(signal: sig, queue: .global())
-                s.setEventHandler { interrupted.set(); kill(-pid, sig) }
-                s.resume()
-                signalSources.append(s)
-            }
-        }
+        fwd.started(pid)
 
         var killReason: StopReason?
         var sigkillAt: Date?
@@ -123,7 +130,8 @@ enum Runner {
                 break  // continue, or app unreachable: keep running, retry next beat
             }
         }
-        signalSources.forEach { $0.cancel() }
+        let forwarded = fwd.signal
+        if killReason != nil || forwarded != nil { kill(-pid, SIGKILL) }  // H1: orphans in the group
 
         let code = exitCode(box.get())
         let (reason, result): (ReleaseReason, Int32)
@@ -132,8 +140,8 @@ enum Runner {
             result = CgateExit.forHardStop(killReason)
             ctx.stderr(killReason == .walltime ? CgateMessage.walltimeKilled(max: job?.max ?? 0)
                                                : CgateMessage.stoppedByUser)
-        } else if interrupted.isSet {
-            (reason, result) = (.interrupted, CgateExit.interrupted)
+        } else if let forwarded {
+            (reason, result) = (.interrupted, 128 + forwarded)
         } else {
             (reason, result) = (.exited, code)
         }
@@ -141,6 +149,13 @@ enum Runner {
             _ = try? ctx.link.call(.release(ReleaseRequest(jobId: job.id, exitCode: code, reason: reason)))
         }
         return result
+    }
+
+    /// `$SHELL` if it is an absolute bash/zsh/sh, else /bin/bash (L1).
+    static func shell(_ env: [String: String]) -> String {
+        env["SHELL"].flatMap {
+            $0.hasPrefix("/") && ["bash", "zsh", "sh"].contains(($0 as NSString).lastPathComponent) ? $0 : nil
+        } ?? "/bin/bash"
     }
 
     /// `wait(2)` status → shell-style exit code (128 + signal when signalled).
@@ -195,9 +210,39 @@ private final class StatusBox: @unchecked Sendable {  // guarded by lock
     func get() -> Int32 { lock.withLock { st } }
 }
 
-final class Flag: @unchecked Sendable {  // guarded by lock
+/// Forwards SIGINT/SIGTERM/SIGHUP to the child's group (also if it arrives before spawn) and
+/// escalates to SIGKILL after `grace` if the child is still running.
+final class Forwarder: @unchecked Sendable {  // guarded by lock
     private let lock = NSLock()
-    private var v = false
-    func set() { lock.withLock { v = true } }
-    var isSet: Bool { lock.withLock { v } }
+    private let grace: TimeInterval
+    private var pid: pid_t?
+    private var sig: Int32?
+    private var exited = false
+
+    init(grace: TimeInterval) { self.grace = grace }
+
+    var signal: Int32? { lock.withLock { sig } }
+
+    func forward(_ s: Int32) {
+        let p: pid_t? = lock.withLock {
+            if sig == nil { sig = s }
+            return exited ? nil : pid
+        }
+        if let p { send(s, to: p) }
+    }
+
+    /// Child spawned: deliver a signal that arrived earlier.
+    func started(_ p: pid_t) {
+        let s: Int32? = lock.withLock { pid = p; return sig }
+        if let s { send(s, to: p) }
+    }
+
+    func markExited() { lock.withLock { exited = true } }
+
+    private func send(_ s: Int32, to p: pid_t) {
+        kill(-p, s)
+        DispatchQueue.global().asyncAfter(deadline: .now() + grace) { [self] in
+            if !lock.withLock({ exited }) { kill(-p, SIGKILL) }
+        }
+    }
 }

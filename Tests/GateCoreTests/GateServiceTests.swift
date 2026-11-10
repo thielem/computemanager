@@ -33,7 +33,23 @@ func makeService(slots: Int = 1, clock: FakeClock, pushes: Recorder<String>? = n
     GateService(settings: GateSettings(slots: slots), level: .on, clock: { clock.now }, isAlive: alive,
                 pusher: NoticePusher(push: { s, t in pushes?.add("\(s)|\(t)") },
                                      resolveSocket: { "/fake/\($0).sock" }),
-                pollWindow: 0.5, pollStep: 0.02, autoTick: false)
+                pollWindow: 0.5, pollStep: 0.02, autoTick: false,
+                signalGroup: { _, _ in -1 }, killGrace: 0.3)  // never signal real groups by default
+}
+
+/// `sh -c <script>` in its own process group; reaped by a background thread.
+func spawnGroup(_ script: String) -> pid_t {
+    var attr: posix_spawnattr_t?
+    posix_spawnattr_init(&attr)
+    defer { posix_spawnattr_destroy(&attr) }
+    posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP))
+    posix_spawnattr_setpgroup(&attr, 0)
+    let argv = ["/bin/sh", "-c", script].map { strdup($0) } + [nil]
+    defer { argv.forEach { free($0) } }
+    var pid: pid_t = 0
+    precondition(posix_spawn(&pid, "/bin/sh", nil, &attr, argv, nil) == 0)
+    Thread.detachNewThread { var st: Int32 = 0; waitpid(pid, &st, 0) }
+    return pid
 }
 
 @Suite struct GateServiceTests {
@@ -118,10 +134,76 @@ func makeService(slots: Int = 1, clock: FakeClock, pushes: Recorder<String>? = n
         _ = await svc.handle(.acquire(req("a", max: 60, pid: 1)))
         _ = await svc.handle(.acquire(req("b", pid: 666)))
         clock.advance(61)
+        _ = await svc.handle(.heartbeat(JobHeartbeatRequest(jobId: try #require(await leaseId(svc, pid: 1)))))
         svc.tick()
         guard case .success(.status(let s)) = await svc.handle(.status) else { Issue.record(); return }
         #expect(s.leases.map(\.pid) == [1])
         #expect(s.leases[0].state == .stopRequested && s.pendingNotices.count == 1)
+    }
+
+    @Test func reapedOrphanGroupGetsTermThenKill() async throws {
+        let clock = FakeClock(t0)
+        let svc = GateService(settings: GateSettings(slots: 2), level: .on, clock: { clock.now },
+                              isAlive: { $0 != 666 }, pusher: .none, pollWindow: 0.5, autoTick: false,
+                              killGrace: 0.3)
+        // TERM-ignoring group: only the SIGKILL escalation ends it.
+        let g = spawnGroup("trap '' TERM; sleep 30 & sleep 30; wait")
+        defer { kill(-g, SIGKILL) }
+        _ = await svc.handle(.acquire(req("a", pid: 666)))  // cgate pid dead
+        let id = try #require(await leaseId(svc, pid: 666))
+        _ = await svc.handle(.heartbeat(JobHeartbeatRequest(jobId: id, pgid: g)))
+        #expect(kill(-g, 0) == 0)
+        svc.tick()
+        #expect(waitUntil(3) { kill(-g, 0) == -1 && errno == ESRCH })
+        guard case .success(.status(let s)) = await svc.handle(.status) else { Issue.record(); return }
+        #expect(s.leases.isEmpty)
+    }
+
+    @Test func silentLeaseReapedAfterTimeout() async throws {
+        let clock = FakeClock(t0)
+        let signals = Recorder<String>()
+        let svc = GateService(settings: GateSettings(slots: 2), level: .on, clock: { clock.now },
+                              isAlive: { _ in true }, pusher: .none, pollWindow: 0.5, autoTick: false,
+                              signalGroup: { g, s in signals.add("\(g):\(s)"); return 0 }, killGrace: 0.05)
+        _ = await svc.handle(.acquire(req("a", pid: 1)))
+        let id = try #require(await leaseId(svc, pid: 1))
+        _ = await svc.handle(.heartbeat(JobHeartbeatRequest(jobId: id, pgid: 4242)))
+        clock.advance(30)
+        svc.tick()
+        guard case .success(.status(let s1)) = await svc.handle(.status) else { Issue.record(); return }
+        #expect(s1.leases.count == 1)
+        clock.advance(6)  // 36 s silent, next reaper run
+        svc.tick()
+        guard case .success(.status(let s2)) = await svc.handle(.status) else { Issue.record(); return }
+        #expect(s2.leases.isEmpty)
+        #expect(waitUntil { signals.all == ["4242:0", "4242:\(SIGTERM)", "4242:0", "4242:\(SIGKILL)"] })
+    }
+
+    @Test func tickDuringGraceDoesNotFireOnChange() async throws {
+        let clock = FakeClock(t0)
+        let svc = makeService(clock: clock)
+        _ = await svc.handle(.acquire(req("a", max: 60)))
+        _ = await svc.handle(.acquire(req("b")))  // queued ticket with an ETA
+        let seen = Recorder<GateStatus>()
+        svc.onChange = { seen.add($0) }
+        let beat = JobHeartbeatRequest(jobId: try #require(await leaseId(svc, pid: 100)))
+        clock.advance(61)
+        _ = await svc.handle(.heartbeat(beat))  // → stopRequested (one change)
+        #expect(waitUntil { seen.all.count == 1 })
+        for _ in 0..<5 {
+            clock.advance(1)
+            _ = await svc.handle(.heartbeat(beat))
+            svc.tick()
+        }
+        usleep(100_000)
+        #expect(seen.all.count == 1)
+    }
+
+    @Test func meetingDoesNotSoftenStops() async {
+        let svc = makeService(clock: FakeClock(t0))
+        _ = await svc.handle(.setGate(SetGateRequest(level: .hardStop)))
+        guard case .success(.meeting(let s)) = await svc.handle(.meeting) else { Issue.record(); return }
+        #expect(s.level == .hardStop)
     }
 
     @Test func socketServerRoundTrip() async throws {
@@ -135,7 +217,7 @@ func makeService(slots: Int = 1, clock: FakeClock, pushes: Recorder<String>? = n
             defer { c.close() }
             return try c.call(.hookCheck(HookCheckRequest(sessionId: "s", toolName: "Bash", command: "make")))
         }.value
-        #expect(reply == .hookCheck(.wrap(newCommand: "cgate run --session s -- make")))
+        #expect(reply == .hookCheck(.deny(reason: CommandMatcher.redirect("make"))))
     }
 }
 
@@ -172,4 +254,9 @@ func makeService(slots: Int = 1, clock: FakeClock, pushes: Recorder<String>? = n
         #expect(ClaudeSessions.messagingSocket(for: "abc", directory: dir) == "/tmp/cc-socks/5.sock")
         #expect(ClaudeSessions.messagingSocket(for: "zzz", directory: dir) == nil)
     }
+}
+
+func leaseId(_ svc: GateService, pid: Int32) async -> UUID? {
+    guard case .success(.status(let s)) = await svc.handle(.status) else { return nil }
+    return s.leases.first { $0.pid == pid }?.jobId
 }

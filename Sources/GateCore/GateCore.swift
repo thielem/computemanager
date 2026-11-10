@@ -14,17 +14,25 @@ import Shared
 /// itself and runs its own timer for elapsed times.
 ///
 /// Background work (started by `init`): a 1 s tick (walltime, ticket-hold expiry) and a reaper
-/// every `Defaults.reaperInterval` (leases whose cgate pid is dead). Notices are also pushed to
-/// the session's Claude Code messaging socket on a background queue.
+/// every `Defaults.reaperInterval` (leases whose cgate pid is dead or that sent no heartbeat for
+/// `GateMachine.heartbeatTimeout`; a reaped lease's live process group gets SIGTERM, then
+/// SIGKILL after `Defaults.killGrace`). Notices are also pushed to the session's Claude Code
+/// messaging socket on a background queue.
 public final class GateService: @unchecked Sendable {  // all mutable state guarded by `lock`
     private let lock = NSLock()
     private var machine: GateMachine
     private var _onChange: (@Sendable (GateStatus) -> Void)?
     private var lastReap = Date.distantPast
+    /// Wall clock vs uptime at the last tick, to detect system sleep.
+    private var lastTickWall = Date()
+    private var lastTickUptime = ProcessInfo.processInfo.systemUptime
     private var timer: DispatchSourceTimer?
 
     private let clock: @Sendable () -> Date
     private let isAlive: @Sendable (Int32) -> Bool
+    /// `kill(-pgid, sig)`.
+    private let signalGroup: @Sendable (Int32, Int32) -> Int32
+    private let killGrace: TimeInterval
     private let pusher: NoticePusher
     private let pollWindow: TimeInterval
     private let pollStep: TimeInterval
@@ -39,10 +47,14 @@ public final class GateService: @unchecked Sendable {  // all mutable state guar
     /// Test/DI initializer.
     init(settings: GateSettings, level: GateLevel, clock: @escaping @Sendable () -> Date,
          isAlive: @escaping @Sendable (Int32) -> Bool, pusher: NoticePusher,
-         pollWindow: TimeInterval, pollStep: TimeInterval = 0.2, autoTick: Bool) {
+         pollWindow: TimeInterval, pollStep: TimeInterval = 0.2, autoTick: Bool,
+         signalGroup: @escaping @Sendable (Int32, Int32) -> Int32 = { kill(-$0, $1) },
+         killGrace: TimeInterval = Defaults.killGrace) {
         machine = GateMachine(settings: settings, level: level)
         self.clock = clock
         self.isAlive = isAlive
+        self.signalGroup = signalGroup
+        self.killGrace = killGrace
         self.pusher = pusher
         self.pollWindow = pollWindow
         self.pollStep = pollStep
@@ -78,7 +90,7 @@ public final class GateService: @unchecked Sendable {  // all mutable state guar
             }))
         case .meeting:
             return .success(.meeting(mutate { m, now in
-                m.setGate(.noMore, slots: nil, now: now)
+                m.meeting(now: now)
                 return m.snapshot(now: now)
             }))
         case .killJob(let r):
@@ -133,10 +145,7 @@ public final class GateService: @unchecked Sendable {  // all mutable state guar
     func waitTicket(_ id: String) async -> WaitTicketResult {
         mutate { m, _ in m.waiters[id, default: 0] += 1 }
         defer {
-            mutate { m, _ in
-                m.waiters[id, default: 1] -= 1
-                if m.waiters[id] == 0 { m.waiters[id] = nil }
-            }
+            mutate { m, now in m.endWait(id, now: now) }
         }
         let start = Date()
         while true {
@@ -148,7 +157,13 @@ public final class GateService: @unchecked Sendable {  // all mutable state guar
 
     /// Walltime / hold expiry; reaper when due.
     func tick() {
-        mutate { m, now in m.advance(now: now) }
+        let wall = Date(), up = ProcessInfo.processInfo.systemUptime
+        let slept = wall.timeIntervalSince(lastTickWall) - (up - lastTickUptime) > 5
+        (lastTickWall, lastTickUptime) = (wall, up)  // only touched on the tick queue
+        mutate { m, now in
+            if slept { m.touchAll(now: now) }  // nobody could heartbeat while asleep
+            m.advance(now: now)
+        }
         let due: [Int32]? = lock.withLock {
             let now = clock()
             guard now.timeIntervalSince(lastReap) >= Defaults.reaperInterval else { return nil }
@@ -157,7 +172,19 @@ public final class GateService: @unchecked Sendable {  // all mutable state guar
         }
         guard let pids = due else { return }
         let dead = Set(pids.filter { !isAlive($0) })
-        if !dead.isEmpty { mutate { $0.reap(dead: dead, now: $1) } }
+        let gone = mutate { $0.reap(dead: dead, now: $1) }
+        killGroups(gone.compactMap(\.pgid))
+    }
+
+    /// Orphaned process groups of reaped leases: SIGTERM, SIGKILL after `killGrace` if alive.
+    private func killGroups(_ pgids: [Int32]) {
+        let signalGroup = signalGroup
+        for g in pgids where g > 1 && g != getpgrp() && signalGroup(g, 0) == 0 {
+            _ = signalGroup(g, SIGTERM)
+            DispatchQueue.global().asyncAfter(deadline: .now() + killGrace) {
+                if signalGroup(g, 0) == 0 { _ = signalGroup(g, SIGKILL) }
+            }
+        }
     }
 
     private func startTimer() {

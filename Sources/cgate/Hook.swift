@@ -5,10 +5,12 @@ import Shared
 ///
 /// stdin: hook JSON (`session_id`, `cwd`, `tool_name`, `tool_input`). Asks the gate
 /// (`hookCheck`, overall ≤ `Defaults.hookClientTimeout`) and maps the decision:
-/// - `wrap`   → allow + `updatedInput` = original `tool_input` with `command` replaced
-/// - `deny`   → deny with the busy / gate-off text
-/// - `notice` → deny once with the notice text
+/// - `deny`   → deny with the reason (heavy command not run via cgate: the exact
+///              `cgate run --max <estimate> -- '<cmd>'` line to use instead)
+/// - `notice` → deny once with the notice text (stop / slot ready)
 /// - `allow`, app unreachable, bad input → no output (fail open). Always exit 0.
+/// The hook never rewrites commands and never answers "allow" (K1, user decision); a legacy
+/// `wrap` decision is ignored (no output).
 enum Hook {
     static func output(stdin: Data, link: GateLink, timeout: TimeInterval = Defaults.hookClientTimeout) -> Data? {
         guard let input = try? JSONSerialization.jsonObject(with: stdin) as? [String: Any],
@@ -20,19 +22,14 @@ enum Hook {
             command: toolInput["command"] as? String,
             cwd: input["cwd"] as? String)
         guard case .hookCheck(let decision)? = try? link.call(.hookCheck(req), timeout: timeout) else { return nil }
-        return render(decision, toolInput: toolInput)
+        return render(decision)
     }
 
-    static func render(_ d: HookDecision, toolInput: [String: Any]) -> Data? {
+    static func render(_ d: HookDecision) -> Data? {
         var out: [String: Any] = ["hookEventName": "PreToolUse"]
         switch d {
-        case .allow:
+        case .allow, .wrap:
             return nil
-        case .wrap(let cmd):
-            var updated = toolInput
-            updated["command"] = cmd
-            out["permissionDecision"] = "allow"
-            out["updatedInput"] = updated
         case .deny(let reason), .notice(let reason):
             out["permissionDecision"] = "deny"
             out["permissionDecisionReason"] = reason

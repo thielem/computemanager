@@ -106,6 +106,50 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         #expect(await h.status().leases.isEmpty)
     }
 
+    @Test func hardStopKillsTermIgnoringGrandchild() async throws {
+        let h = try Harness()
+        let ctx = h.ctx()
+        // The shell dies on TERM; the grandchild ignores it and must still die (H1).
+        async let code = offPool { Runner.run(opts(["(trap '' TERM; sleep 30) & wait"]), ctx) }
+        #expect(await eventually { await h.status().leases.first?.pgid != nil })
+        let pgid = try #require(await h.status().leases.first?.pgid)
+        defer { kill(-pgid, SIGKILL) }
+        let id = try #require(await h.status().leases.first?.jobId)
+        _ = await h.svc.handle(.killJob(KillJobRequest(jobId: id)))
+        #expect(await code == CgateExit.stoppedByUser)
+        #expect(await eventually(2) { kill(-pgid, 0) == -1 && errno == ESRCH })
+    }
+
+    @Test func forwarderEscalatesAndDeliversEarlySignal() async throws {
+        for early in [false, true] {
+            let pid = try #require(Runner.spawn(["/bin/sh", "-c", "trap '' TERM; sleep 30"], env: [:]))
+            let f = Forwarder(grace: 0.2)
+            let p = pid
+            Thread.detachNewThread { var st: Int32 = 0; waitpid(p, &st, 0); f.markExited() }
+            if early { f.forward(SIGTERM); f.started(pid) } else { f.started(pid); f.forward(SIGTERM) }
+            #expect(f.signal == SIGTERM)
+            #expect(await eventually(3) { kill(-p, 0) == -1 && errno == ESRCH })
+        }
+    }
+
+    @Test func shellChoice() {
+        #expect(Runner.shell(["SHELL": "/bin/zsh"]) == "/bin/zsh")
+        #expect(Runner.shell(["SHELL": "/opt/homebrew/bin/bash"]) == "/opt/homebrew/bin/bash")
+        #expect(Runner.shell(["SHELL": "/opt/homebrew/bin/fish"]) == "/bin/bash")
+        #expect(Runner.shell(["SHELL": "zsh"]) == "/bin/bash")
+        #expect(Runner.shell([:]) == "/bin/bash")
+    }
+
+    @Test func sessionFallbackFromSessionsDir() throws {
+        let dir = NSTemporaryDirectory() + "cm-sessions-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        try Data(#"{"sessionId":"abc"}"#.utf8).write(to: URL(fileURLWithPath: dir + "/999999.json"))
+        #expect(SessionLookup.resolve(env: ["CLAUDE_CODE_SESSION_ID": "env"], sessionsDir: dir) == "env")
+        #expect(SessionLookup.resolve(env: ["CLAUDE_PID": "999999"], sessionsDir: dir) == "abc")
+        #expect(SessionLookup.resolve(env: [:], sessionsDir: dir) == "unknown")
+    }
+
     @Test func sigkillAfterGraceWhenTermIgnored() async throws {
         let h = try Harness()
         let ctx = h.ctx()
@@ -207,27 +251,27 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         return try #require(obj?["hookSpecificOutput"] as? [String: Any])
     }
 
-    @Test func wrapPreservesToolInput() async throws {
-        let h = try Harness()
+    @Test func heavyUnwrappedDeniedWithRedirect() async throws {
+        let h = try Harness(slots: 0)  // busy/off doesn't matter: the hook only redirects
         let stdin = try JSONSerialization.data(withJSONObject: input)
         let link = h.link
         let out = try json(await offPool { Hook.output(stdin: stdin, link: link) })
         #expect(out["hookEventName"] as? String == "PreToolUse")
-        #expect(out["permissionDecision"] as? String == "allow")
-        let ui = try #require(out["updatedInput"] as? [String: Any])
-        #expect(ui["command"] as? String == "cgate run --session sess -- 'swift test'")
-        #expect(ui["description"] as? String == "Run tests")
-        #expect(ui["timeout"] as? Int == 600000)
-        #expect(ui["run_in_background"] as? Bool == true)
+        #expect(out["permissionDecision"] as? String == "deny")
+        #expect(out["updatedInput"] == nil)
+        #expect(out["permissionDecisionReason"] as? String
+            == "Compute gate: heavy command. Re-run as: cgate run --max <estimate> -- 'swift test' "
+            + "with run_in_background: true")
+        #expect(await h.status().tickets.isEmpty)
     }
 
-    @Test func busyDenyThenNothingForOtherTools() async throws {
-        let h = try Harness(slots: 0)
+    @Test func wrappedAndOtherToolsGetNoOutput() async throws {
+        let h = try Harness()
         let link = h.link
-        let stdin = try JSONSerialization.data(withJSONObject: input)
-        let out = try json(await offPool { Hook.output(stdin: stdin, link: link) })
-        #expect(out["permissionDecision"] as? String == "deny")
-        #expect((out["permissionDecisionReason"] as? String)?.contains("cgate wait --ticket t1") == true)
+        var wrapped = input
+        wrapped["tool_input"] = ["command": "cgate run --max 10m -- 'cd x && swift test'"]
+        let s1 = try JSONSerialization.data(withJSONObject: wrapped)
+        #expect(await offPool { Hook.output(stdin: s1, link: link) } == nil)
         var other = input
         other["tool_name"] = "Read"
         other["tool_input"] = ["file_path": "/x"]
@@ -250,6 +294,7 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         #expect(await offPool { Hook.output(stdin: stdin, link: link) } == nil)
     }
 
+    /// App unreachable → no output even for a heavy unwrapped command (exit 0 in main).
     @Test func failOpen() async throws {
         let link = GateLink(path: "/tmp/cm-test-nonexistent-\(getpid()).sock")
         let stdin = try JSONSerialization.data(withJSONObject: input)
@@ -260,12 +305,10 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
     }
 
     @Test func renderFixtures() throws {
-        #expect(Hook.render(.allow, toolInput: [:]) == nil)
-        let deny = String(decoding: try #require(Hook.render(.deny(reason: "no"), toolInput: [:])), as: UTF8.self)
+        #expect(Hook.render(.allow) == nil)
+        #expect(Hook.render(.wrap(newCommand: "cgate run -- x")) == nil)  // never rewrite / allow
+        let deny = String(decoding: try #require(Hook.render(.deny(reason: "no"))), as: UTF8.self)
         #expect(deny == #"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"no"}}"#)
-        let wrap = String(decoding: try #require(Hook.render(.wrap(newCommand: "cgate run -- x"),
-                                                             toolInput: ["command": "x", "timeout": 5])), as: UTF8.self)
-        #expect(wrap == #"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"cgate run -- x","timeout":5}}}"#)
     }
 
     @Test func statusRender() {

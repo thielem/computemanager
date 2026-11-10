@@ -4,8 +4,8 @@ Hooks + skill that route heavy agent commands through Compute Manager's gate.
 
 | Part | What it does |
 |---|---|
-| `hooks/hooks.json` | `PreToolUse` `"*"` → `cgate hook`: wraps matching Bash commands in `cgate run --session <id> -- '<cmd>'` (allow + `updatedInput`), denies when busy/off, delivers pending stop / slot-ready notices once |
-| `skills/compute-gate` | Tells agents to run heavy work in the background, wait for tickets, obey stop notices |
+| `hooks/hooks.json` | `PreToolUse` `"*"` → `cgate hook`: denies heavy Bash commands not run via `cgate` with the exact line to use instead (`cgate run --max <estimate> -- '<cmd>'`, background), delivers pending stop / slot-ready notices once (deny). Never rewrites commands, never answers "allow"; app unreachable → no output |
+| `skills/compute-gate` | Primary mechanism: agents run heavy work via `cgate run --max … -- '…'` in the background, wait for tickets, obey stop notices |
 
 ## Install
 
@@ -21,15 +21,21 @@ Hooks + skill that route heavy agent commands through Compute Manager's gate.
 3. Start ComputeManager.app. Without it, `cgate` fails open (commands run ungated and are
    logged to `~/Library/Logs/ComputeManager/cgate-fallback.log`).
 
-## Auto-wrap matching
+## Heavy-command matching
 
 Patterns come from the app settings (default `Defaults.autoWrapPatterns`). The command is split at
-`&&`, `||`, `;`, `|`, `&`, newlines and parentheses (outside quotes); per segment, leading
-`VAR=value` and `time`/`env`/`nohup`/`exec`/`command` are skipped. A pattern matches when its
-words equal the segment's first words; the first word also matches by basename
-(`check.sh` ↔ `./scripts/check.sh`, `make` ↔ `/usr/bin/make`, not `cmake`). Commands containing
-a `cgate …` segment are never re-wrapped. The whole command line is wrapped as one argument and
-run by `cgate run` via `$SHELL -c`.
+`&&`, `||`, `;`, `|`, `&`, newlines and parentheses (outside quotes; heredoc bodies skipped). Per
+segment, prefixes are stripped layer by layer and each layer is tried: `VAR=value`,
+`time`/`env`/`nohup`/`exec`/`command`, `timeout N`, `bash`/`sh`/`zsh` (script path matched,
+`-c '<line>'` matched as a line), `uv run [--flags]`, `python[3] -m`, `npx`, `pnpm exec`. A
+pattern matches when its words equal the segment's first words; the first word also matches by
+basename (`check.sh` ↔ `./scripts/check.sh`, `make` ↔ `/usr/bin/make`, not `cmake`). A line that
+is exactly one `cgate …` invocation is never denied; mixed lines (`cgate status; swift test`) are
+treated like any other.
 
-Note: a wrap answers `permissionDecision: "allow"`, which skips Claude Code's permission prompt
-for that (whole) command line.
+## cgate run
+
+- `cgate run --max 10m -- 'cd x && make'`: one argument = shell line, run via `$SHELL -c`
+  (`$SHELL` if bash/zsh/sh, else `/bin/bash`); `cgate run -- make -j8`: several arguments = argv.
+- A `cd` inside the wrapped line does not persist in the agent's shell.
+- Session: `CLAUDE_CODE_SESSION_ID`, else `~/.claude/sessions/<pid>.json` of an ancestor process.
