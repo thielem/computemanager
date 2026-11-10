@@ -12,16 +12,22 @@ final class GateViewModel {
 
     @ObservationIgnored private let backend: GateBackend
     @ObservationIgnored var onPersist: ((GateStore.Snapshot) -> Void)?
+    @ObservationIgnored private let seq = Sequencer()
+    @ObservationIgnored private var applied: UInt64 = 0
 
     init(backend: GateBackend, initial: GateStatus) {
         self.backend = backend
         self.status = initial
+        let seq = seq
         backend.onChange = { [weak self] s in
-            Task { @MainActor in self?.apply(s) }
+            let n = seq.next()
+            Task { @MainActor in self?.apply(s, seq: n) }
         }
     }
 
     var isOn: Bool { status.level == .on }
+    /// What the gate switch shows: a pending off-choice reads as off until chosen or cancelled.
+    var switchOn: Bool { isOn && !offChoicePending }
     var runningJobs: [Lease] { status.leases.filter { $0.state != .done } }
     var queuedCount: Int { status.tickets.count }
     /// Stronger off levels still available (No more → Soft → Hard), only while jobs run.
@@ -65,17 +71,24 @@ final class GateViewModel {
 
     func updateSettings(_ s: GateSettings) async { await send(.setSettings(s)) }
 
-    func apply(_ s: GateStatus) {
+    func apply(_ s: GateStatus) { apply(s, seq: seq.next()) }
+
+    /// Applies `s` unless a snapshot with a higher sequence number was applied already.
+    func apply(_ s: GateStatus, seq n: UInt64) {
+        guard n > applied else { return }
+        applied = n
         let changed = s.level != status.level || s.settings != status.settings
         status = s
         if changed { onPersist?(GateStore.Snapshot(settings: s.settings, level: s.level)) }
     }
 
     private func send(_ req: GateRequest) async {
+        // Stamped before the call: an onChange fired during/after it is at least as new.
+        let n = seq.next()
         switch await backend.handle(req) {
         case .success(let reply):
             lastError = nil
-            if let s = reply.gateStatus { apply(s) }
+            if let s = reply.gateStatus { apply(s, seq: n) }
         case .failure(let e):
             lastError = e.message.isEmpty ? e.code.rawValue : e.message
         }

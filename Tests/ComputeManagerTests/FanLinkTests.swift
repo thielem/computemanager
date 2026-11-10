@@ -91,6 +91,24 @@ private func waitUntil(_ timeout: TimeInterval = 5, _ cond: () -> Bool) async ->
         link.shutdown()
     }
 
+    /// FakeFand always reports Auto (like a watchdog revert): the link asks again, rate-limited.
+    @Test func revertedModeIsResentRateLimited() async throws {
+        let fand = FakeFand(path: path)
+        try fand.server.start()
+        defer { fand.server.stop() }
+        let link = FanLink(path: path, heartbeatInterval: 0.1, minBackoff: 0.05, maxBackoff: 0.2,
+                           resendInterval: 0.3)
+        link.start()
+        link.setMode(.performance)
+        let perf = { fand.requests.filter { $0 == .setMode(SetModeRequest(mode: .performance)) }.count }
+        #expect(await waitUntil { perf() >= 3 })
+        let before = perf()
+        try? await Task.sleep(for: .milliseconds(600))
+        // Subscribe pushes every 50 ms; the limit keeps re-sends to ~1 per 0.3 s.
+        #expect(perf() - before <= 3)
+        link.shutdown()
+    }
+
     @Test func unreachableReportsNil() async {
         let link = FanLink(path: path, heartbeatInterval: 0.1, minBackoff: 0.05, maxBackoff: 0.1)
         let calls = Locked(0)

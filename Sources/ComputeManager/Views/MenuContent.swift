@@ -32,5 +32,6 @@ struct MenuContent: View {
         }
         .padding(14)
         .frame(width: 320)
+        .onDisappear { model.gate.cancelOffChoice() }
     }
 }

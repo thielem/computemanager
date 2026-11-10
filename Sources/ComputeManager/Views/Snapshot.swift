@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import SwiftUI
 
@@ -21,3 +22,4 @@ enum Snapshot {
         }
     }
 }
+#endif

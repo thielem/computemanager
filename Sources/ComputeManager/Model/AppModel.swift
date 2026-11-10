@@ -35,9 +35,19 @@ enum AppRuntime {
         let snap = store.load()
         let service = GateService(settings: snap.settings, level: snap.level)
         backend = service
-        let demo = ProcessInfo.processInfo.environment["COMPUTEMANAGER_DEMO"] == "1"
-        let gate = GateViewModel(backend: demo ? DemoGate() : service,
-                                 initial: .initial(settings: snap.settings, level: snap.level))
+        let initial = GateStatus.initial(settings: snap.settings, level: snap.level)
+        #if DEBUG
+        // COMPUTEMANAGER_DEMO=1 (fand present, fake status) or =nofan (fand absent):
+        // in-memory gate + fan, never persisted, never touching fans.
+        if let demo = ProcessInfo.processInfo.environment["COMPUTEMANAGER_DEMO"] {
+            let fan = demo == "nofan"
+                ? FanViewModel(link: DemoFan(status: nil), socketPath: "/nonexistent")
+                : FanViewModel(link: DemoFan(status: DemoFan.sample))
+            if demo != "nofan" { fan.select(.performance) }
+            return AppModel(gate: GateViewModel(backend: DemoGate(), initial: initial), fan: fan)
+        }
+        #endif
+        let gate = GateViewModel(backend: service, initial: initial)
         gate.onPersist = { store.save($0) }
         let link = FanLink()
         let fan = FanViewModel(link: link, socketPath: link.path)
@@ -70,9 +80,11 @@ enum AppRuntime {
         launched = true
         m.fan.start()
         Task { await m.gate.refresh() }
+        #if DEBUG
         if let out = ProcessInfo.processInfo.environment["COMPUTEMANAGER_SNAPSHOT"] {
             Snapshot.write(model: m, to: out)
         }
+        #endif
     }
 
     /// Only an instance that actually launched touches fans (a duplicate must not reset them).

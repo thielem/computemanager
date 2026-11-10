@@ -22,6 +22,7 @@ final class FanLink: FanControlling, @unchecked Sendable {
     private let minBackoff: TimeInterval
     private let maxBackoff: TimeInterval
     private let clientTimeout: TimeInterval
+    private let resendInterval: TimeInterval
 
     private let queue = DispatchQueue(label: "computemanager.fan.control")
     private var control: FanClient?
@@ -29,6 +30,7 @@ final class FanLink: FanControlling, @unchecked Sendable {
     private var controlBackoff: TimeInterval
     private var nextAttempt = Date.distantPast
     private var timer: DispatchSourceTimer?
+    private var lastResend = Date.distantPast
 
     private let lock = NSLock()
     private var subscriber: FanClient?
@@ -41,12 +43,14 @@ final class FanLink: FanControlling, @unchecked Sendable {
     }
 
     init(path: String = Paths.fandSocket, heartbeatInterval: TimeInterval = Defaults.fanHeartbeatInterval,
-         minBackoff: TimeInterval = 0.5, maxBackoff: TimeInterval = 8, clientTimeout: TimeInterval = 2) {
+         minBackoff: TimeInterval = 0.5, maxBackoff: TimeInterval = 8, clientTimeout: TimeInterval = 2,
+         resendInterval: TimeInterval = 5) {
         self.path = path
         self.heartbeatInterval = heartbeatInterval
         self.minBackoff = minBackoff
         self.maxBackoff = maxBackoff
         self.clientTimeout = clientTimeout
+        self.resendInterval = resendInterval
         self.controlBackoff = minBackoff
     }
 
@@ -116,6 +120,15 @@ final class FanLink: FanControlling, @unchecked Sendable {
         }
     }
 
+    /// fand reports a mode other than the one we want (e.g. its watchdog reverted to Auto):
+    /// ask again, at most once per `resendInterval`.
+    private func reconcile(_ reported: FanMode) {
+        guard reported != desired, control != nil, Date().timeIntervalSince(lastResend) >= resendInterval
+        else { return }
+        lastResend = Date()
+        callControl(.setMode(SetModeRequest(mode: desired)))
+    }
+
     private func callControl(_ req: FanRequest) {
         guard let c = control else { return }
         do {
@@ -146,6 +159,7 @@ final class FanLink: FanControlling, @unchecked Sendable {
                     if case .subscribe(let s) = try r.result.get() {
                         backoff = minBackoff
                         onStatus?(s)
+                        queue.async { [weak self] in self?.reconcile(s.mode) }
                     }
                 }
             } catch {

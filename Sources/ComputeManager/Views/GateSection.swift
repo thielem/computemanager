@@ -7,12 +7,11 @@ struct GateSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Gate").font(.headline)
-                if gate.status.level.isOff {
-                    Text(Self.levelName(gate.status.level)).foregroundStyle(.secondary)
-                }
+                Label(Self.levelName(gate.switchOn ? .on : gate.status.level),
+                      systemImage: gate.switchOn ? "bolt.fill" : "bolt.slash.fill")
+                    .foregroundStyle(gate.switchOn ? .primary : .secondary)
                 Spacer()
-                Toggle("", isOn: Binding(get: { gate.isOn && !gate.offChoicePending },
+                Toggle("", isOn: Binding(get: { gate.switchOn },
                                          set: { on in Task { await gate.setOn(on) } }))
                     .toggleStyle(.switch).labelsHidden().controlSize(.small)
             }

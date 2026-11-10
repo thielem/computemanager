@@ -103,6 +103,65 @@ import Testing
         #expect(store.load() == .init(settings: s, level: .noMore))
     }
 
+    @Test func storeKeepsBackupOfUnreadableFile() throws {
+        let url = URL(fileURLWithPath: "/tmp/cm-test-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).json")
+        let store = GateStore(url: url)
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: store.backupURL)
+        }
+        let junk = Data("{not json".utf8)
+        try junk.write(to: url)
+        #expect(store.load() == .init(settings: GateSettings(), level: .on))
+        #expect(try Data(contentsOf: store.backupURL) == junk)
+        store.save(.init(settings: GateSettings(), level: .noMore))
+        #expect(try Data(contentsOf: store.backupURL) == junk)
+    }
+
+    @Test func closingMenuCancelsPendingOffChoice() async {
+        let fake = FakeGate(leases: [lease()])
+        let app = AppModel(gate: make(fake), fan: FanViewModel(link: FakeFanLink()))
+        await app.gate.setOn(false)
+        #expect(!app.gate.switchOn)
+        app.gate.cancelOffChoice()  // MenuContent.onDisappear
+        #expect(app.gate.switchOn)
+        #expect(fake.requests.isEmpty)
+    }
+
+    @Test func staleSnapshotsDropped() {
+        let vm = make(FakeGate())
+        var newer = vm.status
+        newer.slots = 5
+        var older = vm.status
+        older.slots = 3
+        vm.apply(newer, seq: .max - 1)
+        vm.apply(older, seq: 1)
+        #expect(vm.status.slots == 5)
+    }
+
+    @Test func capBoundedAndDefaultFollows() {
+        var s = GateSettings()
+        s.defaultMaxRuntimeSeconds = 40 * 60
+        s = SettingsView.setting(s, \.maxRuntimeCapSeconds, minutes: 240)
+        #expect(s.maxRuntimeCapSeconds == Defaults.maxRuntimeCap)
+        s = SettingsView.setting(s, \.maxRuntimeCapSeconds, minutes: 30)
+        #expect(s.maxRuntimeCapSeconds == 30 * 60)
+        #expect(s.defaultMaxRuntimeSeconds == 30 * 60)
+        s = SettingsView.setting(s, \.defaultMaxRuntimeSeconds, minutes: 90)
+        #expect(s.defaultMaxRuntimeSeconds == 30 * 60)
+        #expect(SettingsView.capLimit == 60)
+    }
+
+    @Test func nonAutoFanModeHoldsActivity() {
+        let fan = FanViewModel(link: FakeFanLink())
+        fan.select(.performance)
+        #expect(fan.activity != nil)
+        fan.select(.max)
+        #expect(fan.activity != nil)
+        fan.select(.auto)
+        #expect(fan.activity == nil)
+    }
+
     @Test func patternParsing() {
         #expect(SettingsView.parse(" make \n\npytest\nmake\n") == ["make", "pytest"])
     }

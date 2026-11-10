@@ -1,3 +1,4 @@
+#if DEBUG
 import Foundation
 import Shared
 
@@ -50,3 +51,39 @@ final class DemoGate: GateBackend, @unchecked Sendable {  // guarded by `lock`
         }
     }
 }
+
+/// Fake fand link for demo screenshots: reports a fixed status (nil = fand absent).
+final class DemoFan: FanControlling, @unchecked Sendable {  // guarded by `lock`
+    static let sample = FanStatus(
+        mode: .performance,
+        fans: [FanInfo(id: 0, actualRPM: 3412, minRPM: 1200, maxRPM: 6000, targetRPM: 3400, control: .manual),
+               FanInfo(id: 1, actualRPM: 3388, minRPM: 1200, maxRPM: 6000, targetRPM: 3400, control: .manual)],
+        temps: Temperatures(pcoreMax: 78.4, ecoreMax: 66.0), thermalState: .fair, lastHeartbeat: nil)
+
+    private let lock = NSLock()
+    private var _onStatus: (@Sendable (FanStatus?) -> Void)?
+    private var status: FanStatus?
+
+    init(status: FanStatus?) { self.status = status }
+
+    var onStatus: (@Sendable (FanStatus?) -> Void)? {
+        get { lock.withLock { _onStatus } }
+        set { lock.withLock { _onStatus = newValue } }
+    }
+
+    func start() {
+        let (cb, s) = lock.withLock { (_onStatus, status) }
+        cb?(s)
+    }
+
+    func setMode(_ mode: FanMode) {
+        let (cb, s) = lock.withLock { () -> ((@Sendable (FanStatus?) -> Void)?, FanStatus?) in
+            status?.mode = mode
+            return (_onStatus, status)
+        }
+        cb?(s)
+    }
+
+    func shutdown() {}
+}
+#endif
