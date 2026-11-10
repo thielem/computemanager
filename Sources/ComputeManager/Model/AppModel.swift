@@ -35,7 +35,8 @@ enum AppRuntime {
         let snap = store.load()
         let service = GateService(settings: snap.settings, level: snap.level)
         backend = service
-        let gate = GateViewModel(backend: service,
+        let demo = ProcessInfo.processInfo.environment["COMPUTEMANAGER_DEMO"] == "1"
+        let gate = GateViewModel(backend: demo ? DemoGate() : service,
                                  initial: .initial(settings: snap.settings, level: snap.level))
         gate.onPersist = { store.save($0) }
         let link = FanLink()
@@ -69,6 +70,9 @@ enum AppRuntime {
         launched = true
         m.fan.start()
         Task { await m.gate.refresh() }
+        if let out = ProcessInfo.processInfo.environment["COMPUTEMANAGER_SNAPSHOT"] {
+            Snapshot.write(model: m, to: out)
+        }
     }
 
     /// Only an instance that actually launched touches fans (a duplicate must not reset them).

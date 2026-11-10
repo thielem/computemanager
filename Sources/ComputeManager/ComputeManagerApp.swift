@@ -10,7 +10,7 @@ struct ComputeManagerApp: App {
         MenuBarExtra {
             MenuContent(model: model)
         } label: {
-            Image(nsImage: MenuBarIcon.image(for: model.icon))
+            MenuBarLabel(model: model)
         }
         .menuBarExtraStyle(.window)
 
@@ -18,6 +18,12 @@ struct ComputeManagerApp: App {
             SettingsView(gate: model.gate)
         }
     }
+}
+
+/// Separate view so observation of the model reliably refreshes the glyph.
+private struct MenuBarLabel: View {
+    let model: AppModel
+    var body: some View { Image(nsImage: MenuBarIcon.image(for: model.icon)) }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {

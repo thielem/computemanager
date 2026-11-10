@@ -107,3 +107,18 @@ import Testing
         #expect(SettingsView.parse(" make \n\npytest\nmake\n") == ["make", "pytest"])
     }
 }
+
+@Suite struct MenuBarIconTests {
+    @Test func symbols() {
+        let on = MenuBarIcon.State(level: .on, jobsRunning: false, fanMode: .auto, fanReachable: true)
+        #expect(MenuBarIcon.symbols(for: on).map(\.first) == ["bolt.fill"])
+        var s = on
+        s.level = .softStop
+        s.jobsRunning = true
+        s.fanMode = .max
+        #expect(MenuBarIcon.symbols(for: s).map(\.first) == ["bolt.badge.clock.fill", "wind"])
+        s.fanReachable = false
+        s.jobsRunning = false
+        #expect(MenuBarIcon.symbols(for: s).map(\.first) == ["bolt.slash.fill"])
+    }
+}
