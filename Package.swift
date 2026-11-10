@@ -23,7 +23,7 @@ let package = Package(
         .executableTarget(name: "cgate", dependencies: ["Shared"]),
         .testTarget(name: "SharedTests", dependencies: ["Shared"]),
         .testTarget(name: "GateCoreTests", dependencies: ["GateCore", "Shared"]),
-        .testTarget(name: "cgateTests", dependencies: ["cgate", "Shared"]),
+        .testTarget(name: "cgateTests", dependencies: ["cgate", "Shared", "GateCore"]),
         .testTarget(name: "ComputeManagerTests", dependencies: ["ComputeManager", "Shared"]),
         .testTarget(name: "fandTests", dependencies: ["fand", "Shared"]),
     ]
