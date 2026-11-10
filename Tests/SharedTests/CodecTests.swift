@@ -51,6 +51,12 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
             .status,
             .setGate(SetGateRequest(level: .hardStop)),
             .meeting,
+            .killJob(KillJobRequest(jobId: UUID())),
+            .setSettings(GateSettings(slots: 3, patterns: ["make"], defaultMaxRuntimeSeconds: 60,
+                                      maxRuntimeCapSeconds: 120)),
+            .acquire(AcquireRequest(sessionId: "s", cwd: "/p", command: "make", pid: 10, pgid: 11,
+                                    maxRuntimeSeconds: 900,
+                                    reattach: Reattach(jobId: UUID(), startedAt: t0))),
         ]
         for m in reqs {
             let r = Request(id: "x", m)
@@ -80,7 +86,8 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
             .hookCheck(.notice(text: "n")),
             .waitTicket(.ready(ticket: "t1", heldUntil: t0)), .waitTicket(.expired(ticket: "t1")),
             .waitTicket(.pending(TicketInfo(id: "t1", position: 1, eta: t0))),
-            .status(status), .setGate(status), .meeting(status),
+            .status(status), .setGate(status), .meeting(status), .killJob(status),
+            .setSettings(status),
         ]
         for m in replies {
             let r = Response(id: "x", m)
@@ -150,5 +157,47 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(Defaults.ticketHold == 120 && Defaults.walltimeGrace == 60)
         #expect(Defaults.fanWatchdogTimeout == 10 && Defaults.fanHeartbeatInterval == 2)
         #expect(Defaults.fanCurve == FanCurve(lowTemp: 55, highTemp: 85, hysteresis: 3, tick: 2))
+    }
+}
+
+@Suite struct ContractHelperTests {
+    @Test func reattachIsOptionalOnTheWire() throws {
+        let line = Data(#"{"v":1,"id":"1","op":"acquire","body":{"sessionId":"s","cwd":"/p","command":"make","pid":1,"autoWrapped":false}}"#.utf8)
+        let r = try WireCoding.decode(Request<GateRequest>.self, line: line)
+        guard case .acquire(let a) = r.message else { Issue.record("not acquire"); return }
+        #expect(a.reattach == nil)
+    }
+
+    @Test func commandIsCappedOnSend() {
+        let short = "make test"
+        #expect(CommandText.capped(short) == short)
+        let long = String(repeating: "ä", count: 5000)  // 10'000 UTF-8 bytes
+        let c = CommandText.capped(long)
+        #expect(c.utf8.count <= Defaults.maxCommandBytes)
+        #expect(c.hasSuffix(CommandText.truncationMarker))
+        #expect(AcquireRequest(sessionId: "s", cwd: "/", command: long, pid: 1).command == c)
+        let exact = String(repeating: "a", count: Defaults.maxCommandBytes)
+        #expect(CommandText.capped(exact) == exact)
+    }
+
+    @Test func worstCaseStatusFitsInOneLine() throws {
+        // Command made of characters that JSON-escape to 6 bytes each.
+        let nasty = CommandText.capped(String(repeating: "\u{01}", count: 10_000))
+        let lease = Lease(sessionId: String(repeating: "s", count: 64), cwd: String(repeating: "/d", count: 512),
+                          command: nasty, pid: 1, pgid: 2, startedAt: t0, maxRuntimeSeconds: 900,
+                          autoWrapped: true, messagingSocket: String(repeating: "m", count: 104))
+        let status = GateStatus(level: .on, slots: 32, effectiveSlots: 32,
+                                leases: Array(repeating: lease, count: 64),
+                                tickets: Array(repeating: TicketInfo(id: "t100", position: 1, eta: t0), count: 64),
+                                heldSlot: nil, nextSlotETA: t0,
+                                pendingNotices: Array(repeating: PendingNotice(sessionId: "s", text: CgateMessage.hardStopNotice), count: 64),
+                                settings: GateSettings())
+        let bytes = try WireCoding.line(Response(id: "x", GateReply.status(status))).count
+        #expect(bytes * 2 < Defaults.maxLineBytes)
+    }
+
+    @Test func exitCodes() {
+        #expect(CgateExit.spawnFailed == 70)
+        #expect(CgateExit.interrupted == 130)
     }
 }

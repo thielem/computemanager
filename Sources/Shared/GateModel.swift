@@ -15,11 +15,23 @@ import Foundation
 //   notice to the job's session; at + `Defaults.walltimeGrace` → heartbeat answers
 //   `hardStop(walltime)`; cgate kills its pgid and exits 77.
 //
-// Tickets (GATE-12): FIFO. A busy acquire issues a ticket (or returns the existing ticket
-//   of that session). When a slot frees and tickets exist, it is held for the oldest ticket
-//   for `Defaults.ticketHold`; only an acquire carrying that ticket can take it. Unclaimed →
-//   ticket expires, slot goes to the next ticket (or free). ETA (GATE-3) = min over running
-//   leases of started_at + maxRuntime.
+// Tickets (GATE-12): FIFO, keyed per (sessionId, cwd). A busy acquire issues a ticket (or
+//   returns the existing ticket of that (session, cwd)). Session `unknown` never shares: every
+//   busy acquire from it gets its own ticket. When a slot frees and tickets exist, it is held
+//   for the oldest ticket for `Defaults.ticketHold`; only an acquire carrying that ticket can
+//   take it. Unclaimed → ticket expires, slot goes to the next ticket (or free).
+//   `run --ticket` with a ticket that is still queued (not yet held) → `busy` with the current
+//   position/ETA; the ticket is kept. ETA (GATE-3) = min over running leases of
+//   started_at + maxRuntime.
+//
+// Reattach (app restart): heartbeat answers `unknownJob` → cgate re-sends `acquire` with
+//   `reattach` (see `AcquireRequest.reattach`). The server ALWAYS grants a reattach (even above
+//   the slot count or with the gate off: running processes are never refused), keeps the jobId
+//   and the original startedAt, so the walltime deadline is unchanged. Gate level then applies
+//   via heartbeat directives as for any running lease.
+//
+// Command text: `Lease.command` may be truncated (senders cap it at `Defaults.maxCommandBytes`,
+//   see `CommandText.capped`).
 
 /// Gate level selected by the user.
 public enum GateLevel: String, Codable, Sendable, CaseIterable {
@@ -60,6 +72,7 @@ public struct Lease: Codable, Sendable, Equatable, Identifiable {
     /// `unknown` if absent (AGENT-6).
     public var sessionId: String
     public var cwd: String
+    /// May be truncated (`CommandText.capped`).
     public var command: String
     /// cgate's own pid (liveness check for reaping, GATE-6).
     public var pid: Int32
@@ -108,11 +121,14 @@ public struct Ticket: Codable, Sendable, Equatable, Identifiable {
     /// Short human-typable id, e.g. `t7` (GateCore chooses the format).
     public var id: String
     public var sessionId: String
+    /// Tickets are keyed per (sessionId, cwd).
+    public var cwd: String
     public var issuedAt: Date
 
-    public init(id: String, sessionId: String, issuedAt: Date) {
+    public init(id: String, sessionId: String, cwd: String, issuedAt: Date) {
         self.id = id
         self.sessionId = sessionId
+        self.cwd = cwd
         self.issuedAt = issuedAt
     }
 }
@@ -153,15 +169,20 @@ public struct PendingNotice: Codable, Sendable, Equatable {
     }
 }
 
-/// User-editable gate settings (persisted by the app).
+/// User-editable gate settings (persisted by the app; changed via `setSettings`).
 public struct GateSettings: Codable, Sendable, Equatable {
+    /// Configured slot count (same value as `GateStatus.slots`; `setGate` with `slots` updates it).
+    public var slots: Int
+    /// Auto-wrap patterns (AGENT-4).
     public var patterns: [String]
     public var defaultMaxRuntimeSeconds: TimeInterval
     public var maxRuntimeCapSeconds: TimeInterval
 
-    public init(patterns: [String] = Defaults.autoWrapPatterns,
+    public init(slots: Int = Defaults.slots,
+                patterns: [String] = Defaults.autoWrapPatterns,
                 defaultMaxRuntimeSeconds: TimeInterval = Defaults.defaultMaxRuntime,
                 maxRuntimeCapSeconds: TimeInterval = Defaults.maxRuntimeCap) {
+        self.slots = slots
         self.patterns = patterns
         self.defaultMaxRuntimeSeconds = defaultMaxRuntimeSeconds
         self.maxRuntimeCapSeconds = maxRuntimeCapSeconds

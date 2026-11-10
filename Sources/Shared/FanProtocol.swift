@@ -11,12 +11,23 @@ import Foundation
 // | `heartbeat` | —                     | — (resets the watchdog, FAN-5)               |
 // | `subscribe` | —                     | stream of `FanStatus`, every `Defaults.fanSubscribeInterval`, same `id`, op `subscribe` |
 //
-// Auth: every connection's peer UID must equal the console user's UID, else each request
-// is answered with `unauthorized` (FAN-9). No raw SMC access over IPC.
+// Auth: every connection's peer UID must equal the console user's UID, else the first request
+// is answered with `unauthorized` and the connection is closed (FAN-9). No raw SMC access
+// over IPC.
+//
+// Safety (FAN-4/FAN-5), three layers:
+//   1. Clean quit: the app sends `setMode(auto)` before exiting.
+//   2. Crash: fand registers `MessageServer(onDisconnect:)`; when a connection that sent
+//      `setMode`/`heartbeat` (the app's control connection, identified by
+//      `RequestContext.connectionId`) drops, fand reverts to Auto immediately.
+//   3. Watchdog: no `heartbeat` for `Defaults.fanWatchdogTimeout` (10 s) → Auto (last resort).
+// The app uses separate connections: one for `subscribe` (blocked by the stream) and one for
+// `heartbeat`/`setMode`/`status` requests (the control connection).
 
 /// User-selectable fan mode (FAN-1).
 public enum FanMode: String, Codable, Sendable, CaseIterable {
-    /// Apple's default control (`F*Md=0`, `Ftst=0`).
+    /// Apple's default control (`F*Md=0`; `Ftst=0` only if the key exists; absent on
+    /// M2 Pro / macOS 27).
     case auto
     /// Custom curve on hottest P-core temperature (FAN-2, FAN-3).
     case performance

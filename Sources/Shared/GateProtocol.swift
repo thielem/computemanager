@@ -14,9 +14,18 @@ import Foundation
 // | `status`     | cgate status, UI | —                 | `GateStatus`                       |
 // | `setGate`    | UI / debug  | `SetGateRequest`       | `GateStatus`                       |
 // | `meeting`    | UI / debug  | —                      | `GateStatus` (gate → noMore; the APP also sets fans → auto via fand) |
+// | `killJob`    | UI / debug  | `KillJobRequest`       | `GateStatus` (hard stop for one job: notice + kill; reason userKill, exit 78; unknown job → invalidState) |
+// | `setSettings`| UI / debug  | `GateSettings`         | `GateStatus` (slots, default/cap max runtime, auto-wrap patterns) |
 //
-// The app hosts GateCore in-process; UI uses GateCore directly, the socket ops above are the
-// cgate surface (setGate/meeting exposed for debugging and scripting).
+// The app hosts GateCore in-process; the UI calls the same ops in-process through
+// `GateService.handle(_:)` (no socket). Over the socket they are the cgate surface
+// (setGate/meeting/killJob/setSettings exposed for debugging and scripting).
+//
+// Size limits: `AcquireRequest.command` is capped at `Defaults.maxCommandBytes` by the sender
+// (`CommandText.capped`, done by `AcquireRequest.init`); `Lease.command` in status replies may
+// therefore be truncated. `HookCheckRequest.command` is NOT truncated (the server needs it
+// verbatim to build `wrap`); a request over `Defaults.maxLineBytes` fails and the hook fails
+// open.
 
 // MARK: Requests
 
@@ -24,7 +33,8 @@ public struct AcquireRequest: Codable, Sendable, Equatable {
     /// Claude Code session id, or `unknown` (AGENT-6).
     public var sessionId: String
     public var cwd: String
-    /// The wrapped command, as the user/agent wrote it.
+    /// The wrapped command, as the user/agent wrote it; capped by `init` at
+    /// `Defaults.maxCommandBytes` (`CommandText.capped`).
     public var command: String
     /// cgate's pid.
     public var pid: Int32
@@ -36,19 +46,43 @@ public struct AcquireRequest: Codable, Sendable, Equatable {
     public var ticket: String?
     public var autoWrapped: Bool
     public var messagingSocket: String?
+    /// Set when re-registering an already running job after the heartbeat answered
+    /// `unknownJob` (app restarted). Always granted; see `Reattach`.
+    public var reattach: Reattach?
 
     public init(sessionId: String, cwd: String, command: String, pid: Int32, pgid: Int32? = nil,
                 maxRuntimeSeconds: TimeInterval? = nil, ticket: String? = nil,
-                autoWrapped: Bool = false, messagingSocket: String? = nil) {
+                autoWrapped: Bool = false, messagingSocket: String? = nil,
+                reattach: Reattach? = nil) {
         self.sessionId = sessionId
         self.cwd = cwd
-        self.command = command
+        self.command = CommandText.capped(command)
         self.pid = pid
         self.pgid = pgid
         self.maxRuntimeSeconds = maxRuntimeSeconds
         self.ticket = ticket
         self.autoWrapped = autoWrapped
         self.messagingSocket = messagingSocket
+        self.reattach = reattach
+    }
+}
+
+/// Re-registration of a running job (cgate behaviour on `unknownJob`):
+/// cgate keeps the child running (never kills on `unknownJob`) and re-sends `acquire` with the
+/// original fields (sessionId, cwd, command, pid, pgid, autoWrapped, messagingSocket),
+/// `maxRuntimeSeconds` = the effective value from the original `granted`, `ticket` = nil, and
+/// `reattach` = {original jobId, original startedAt}. The server ALWAYS answers `granted`
+/// (ignores slot count and gate level; running processes are never refused), reusing `jobId`
+/// and keeping `startedAt`, so the walltime deadline is unchanged. If the gate is off, the
+/// usual stop directives follow on later heartbeats. If the app is unreachable, cgate keeps
+/// the child running and retries at the heartbeat interval.
+public struct Reattach: Codable, Sendable, Equatable {
+    public var jobId: UUID
+    public var startedAt: Date
+
+    public init(jobId: UUID, startedAt: Date) {
+        self.jobId = jobId
+        self.startedAt = startedAt
     }
 }
 
@@ -58,9 +92,10 @@ public enum ReleaseReason: String, Codable, Sendable {
     case exited
     /// Killed by cgate after a hardStop directive.
     case killed
-    /// Child could not be spawned.
+    /// Child could not be spawned. cgate exits `CgateExit.spawnFailed` (70).
     case spawnFailed
-    /// cgate itself got a signal (e.g. Ctrl-C) and forwarded it.
+    /// cgate itself got a signal (e.g. Ctrl-C) and forwarded it. cgate exits
+    /// `CgateExit.interrupted` (130).
     case interrupted
 }
 
@@ -119,6 +154,11 @@ public struct SetGateRequest: Codable, Sendable, Equatable {
     }
 }
 
+public struct KillJobRequest: Codable, Sendable, Equatable {
+    public var jobId: UUID
+    public init(jobId: UUID) { self.jobId = jobId }
+}
+
 public enum GateRequest: OpMessage {
     case acquire(AcquireRequest)
     case release(ReleaseRequest)
@@ -128,6 +168,8 @@ public enum GateRequest: OpMessage {
     case status
     case setGate(SetGateRequest)
     case meeting
+    case killJob(KillJobRequest)
+    case setSettings(GateSettings)
 
     public static var version: Int { ProtocolVersion.gate }
 
@@ -141,12 +183,16 @@ public enum GateRequest: OpMessage {
         case .status: "status"
         case .setGate: "setGate"
         case .meeting: "meeting"
+        case .killJob: "killJob"
+        case .setSettings: "setSettings"
         }
     }
 
     public func encodeBody(into c: inout KeyedEncodingContainer<EnvelopeKey>) throws {
         switch self {
         case .acquire(let b): try c.encode(b, forKey: .body)
+        case .killJob(let b): try c.encode(b, forKey: .body)
+        case .setSettings(let b): try c.encode(b, forKey: .body)
         case .release(let b): try c.encode(b, forKey: .body)
         case .heartbeat(let b): try c.encode(b, forKey: .body)
         case .hookCheck(let b): try c.encode(b, forKey: .body)
@@ -166,6 +212,8 @@ public enum GateRequest: OpMessage {
         case "status": self = .status
         case "setGate": self = .setGate(try c.body(SetGateRequest.self))
         case "meeting": self = .meeting
+        case "killJob": self = .killJob(try c.body(KillJobRequest.self))
+        case "setSettings": self = .setSettings(try c.body(GateSettings.self))
         default: throw WireError(.unknownOp, op)
         }
     }
@@ -177,9 +225,11 @@ public enum GateRequest: OpMessage {
 public enum AcquireResult: Codable, Sendable, Equatable {
     /// Slot granted. `maxRuntimeSeconds` is the effective (defaulted + capped) value.
     case granted(jobId: UUID, maxRuntimeSeconds: TimeInterval)
-    /// No slot: ticket issued (or the session's existing ticket). cgate exits 75.
+    /// No slot: ticket issued (or the existing ticket of this (session, cwd)); also the answer
+    /// to `run --ticket` whose ticket is still queued (current position/ETA, ticket kept).
+    /// cgate exits 75. Never returned for `reattach`.
     case busy(TicketInfo)
-    /// Gate off. cgate exits 76 with `message` (= `CgateMessage.gateOff`).
+    /// Gate off. cgate exits 76 with `message` (= `CgateMessage.gateOff`). Never for `reattach`.
     case off(message: String)
     /// The claimed ticket is unknown or expired. cgate exits 79.
     case ticketExpired(ticket: String)
@@ -225,7 +275,9 @@ public enum HeartbeatDirective: Codable, Sendable, Equatable {
     /// cgate must SIGTERM the child pgid, SIGKILL after `Defaults.killGrace`, then exit
     /// 77 (walltime) or 78 (user).
     case hardStop(reason: StopReason)
-    /// App does not know this job (e.g. app restarted). cgate re-sends `acquire`; it never kills.
+    /// App does not know this job (e.g. app restarted). cgate re-sends `acquire` with
+    /// `reattach` (see `Reattach`) and continues heartbeating with the returned jobId;
+    /// it never kills on `unknownJob`.
     case unknownJob
 
     private enum K: String, CodingKey { case reason }
@@ -344,6 +396,8 @@ public enum GateReply: OpMessage {
     case status(GateStatus)
     case setGate(GateStatus)
     case meeting(GateStatus)
+    case killJob(GateStatus)
+    case setSettings(GateStatus)
 
     public static var version: Int { ProtocolVersion.gate }
 
@@ -357,6 +411,8 @@ public enum GateReply: OpMessage {
         case .status: "status"
         case .setGate: "setGate"
         case .meeting: "meeting"
+        case .killJob: "killJob"
+        case .setSettings: "setSettings"
         }
     }
 
@@ -367,7 +423,8 @@ public enum GateReply: OpMessage {
         case .heartbeat(let b): try c.encode(b, forKey: .body)
         case .hookCheck(let b): try c.encode(b, forKey: .body)
         case .waitTicket(let b): try c.encode(b, forKey: .body)
-        case .status(let b), .setGate(let b), .meeting(let b): try c.encode(b, forKey: .body)
+        case .status(let b), .setGate(let b), .meeting(let b), .killJob(let b), .setSettings(let b):
+            try c.encode(b, forKey: .body)
         }
     }
 
@@ -381,6 +438,8 @@ public enum GateReply: OpMessage {
         case "status": self = .status(try c.body(GateStatus.self))
         case "setGate": self = .setGate(try c.body(GateStatus.self))
         case "meeting": self = .meeting(try c.body(GateStatus.self))
+        case "killJob": self = .killJob(try c.body(GateStatus.self))
+        case "setSettings": self = .setSettings(try c.body(GateStatus.self))
         default: throw WireError(.unknownOp, op)
         }
     }

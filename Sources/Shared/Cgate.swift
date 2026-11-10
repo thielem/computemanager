@@ -21,6 +21,11 @@ public enum CgateExit {
     public static let stoppedByUser: Int32 = 78
     /// Ticket expired / unknown (`wait`, `run --ticket`).
     public static let ticketExpired: Int32 = 79
+    /// `run`: child could not be spawned (EX_SOFTWARE). Release reason `spawnFailed`.
+    public static let spawnFailed: Int32 = 70
+    /// `run`: cgate interrupted (SIGINT/SIGTERM forwarded to the child) = 128 + SIGINT.
+    /// Release reason `interrupted`.
+    public static let interrupted: Int32 = 130
     // `cgate run` otherwise exits with the child's exit code (128 + signal if signalled).
 
     /// Exit code for a hard stop directive.
@@ -131,5 +136,26 @@ public enum DurationFormat {
         if m > 0 { out += "\(m)m" }
         if s > 0 || out.isEmpty { out += "\(s)s" }
         return out
+    }
+}
+
+/// Sender-side cap for command text sent over IPC (`AcquireRequest.command`).
+public enum CommandText {
+    public static let truncationMarker = "…[truncated]"
+
+    /// `s` unchanged if ≤ `maxBytes` UTF-8 bytes; else its longest character-aligned prefix
+    /// that fits together with `truncationMarker` (total ≤ `maxBytes`).
+    public static func capped(_ s: String, maxBytes: Int = Defaults.maxCommandBytes) -> String {
+        guard s.utf8.count > maxBytes else { return s }
+        let budget = maxBytes - truncationMarker.utf8.count
+        var used = 0
+        var out = ""
+        for ch in s {
+            let n = String(ch).utf8.count
+            guard used + n <= budget else { break }
+            out.append(ch)
+            used += n
+        }
+        return out + truncationMarker
     }
 }

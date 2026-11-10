@@ -55,10 +55,22 @@ public enum Defaults {
     // MARK: IPC
 
     /// Max bytes of a single NDJSON line (excluding the newline). Longer lines are rejected.
-    public static let maxLineBytes = 64 * 1024
+    /// Sized well above worst-case `status` replies (leases × capped command, JSON escaping
+    /// can inflate up to 6×, plus tickets, notices, patterns).
+    public static let maxLineBytes = 4 * 1024 * 1024
+    /// Sender-side cap for `AcquireRequest.command` (UTF-8 bytes, incl. truncation marker).
+    public static let maxCommandBytes = 4 * 1024
+    /// Max concurrent connections per server; excess connections are closed immediately.
+    public static let maxConnections = 32
+    /// Server-side send timeout on accepted connections: a peer that stops reading (e.g. a
+    /// stalled `subscribe` client) makes writes fail with `.timeout`; the connection then ends.
+    public static let serverSendTimeout: TimeInterval = 2
+    /// Accept-loop back-off after a transient `accept` error (EMFILE, ECONNABORTED, …).
+    public static let acceptRetryDelay: TimeInterval = 0.1
     /// Client timeout for `cgate hook` (AGENT-7: hook must be fast; on timeout fail-open).
+    /// `MessageClient.call` enforces it as an overall deadline across all reads/writes.
     public static let hookClientTimeout: TimeInterval = 0.5
-    /// Default client timeout for one request/response round trip.
+    /// Default client timeout for one request/response round trip (overall deadline of `call`).
     public static let clientTimeout: TimeInterval = 5
 }
 
