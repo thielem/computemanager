@@ -3,7 +3,7 @@ import Foundation
 import Shared
 
 /// Everything `cgate run` needs from the outside world (injectable for tests).
-struct RunContext {
+struct RunContext: Sendable {
     var link: GateLink
     var env: [String: String]
     var cwd: String
@@ -12,7 +12,7 @@ struct RunContext {
     var fallbackLog: String = Paths.cgateFallbackLog
     /// Forward SIGINT/SIGTERM/SIGHUP to the child (real CLI only).
     var forwardSignals = false
-    var stderr: (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+    var stderr: @Sendable (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
 
     static func live() -> RunContext {
         RunContext(link: GateLink(path: Paths.gateSocket), env: ProcessInfo.processInfo.environment,
