@@ -87,10 +87,7 @@ enum OneShot {
     static func printStatus() -> Int32 {
         do {
             let smc = try AppleSMC()
-            // Force Auto before the slow temperature-key enumeration (FAN-6).
-        let fansOnly = FanHardware.discover(smc, enumerateTemps: false)
-        for e in fansOnly.setAuto() { Log.line("startup revert error: \(e)") }
-        let hw = fansOnly.discoveringTemps()
+            let hw = FanHardware.discover(smc)  // read-only: no setAuto here
             let s = FanStatus(mode: .auto, fans: hw.readFans(), temps: hw.readTemps(),
                               thermalState: ThermalState(ProcessInfo.processInfo.thermalState),
                               lastHeartbeat: nil)

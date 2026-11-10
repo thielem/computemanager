@@ -32,3 +32,4 @@ Round 1:
 - 5 Auto only after temp enumeration — accepted, fixed: discover fans, `setAuto()`, then enumerate temp keys.
 - 6 Ftst retry in tick — no action: `Ftst` absent on this hardware (verified), code path unused.
 - 7 install dir ownership — accepted, fixed: `install.sh` aborts unless /usr/local, /usr/local/libexec, target dir (if present) are root-owned, non-symlink, not group/other-writable.
+Round 2: print-status regression fixed; Daemon-order test not added (accepted)
