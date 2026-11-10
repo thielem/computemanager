@@ -42,6 +42,9 @@
 ## Python
 - If ever needed: uv only (`uv run`, `uv add`, inline script metadata). Never pip/conda/poetry.
 
+## GateService UI API
+App (B) creates GateService with persisted settings/level, subscribes via onChange, mutates only via handle(...).
+
 ## Status file
 `status/<pkg>.md`, updated at each milestone, with these sections:
 

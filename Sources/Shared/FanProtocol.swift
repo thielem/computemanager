@@ -21,6 +21,8 @@ import Foundation
 //      `setMode`/`heartbeat` (the app's control connection, identified by
 //      `RequestContext.connectionId`) drops, fand reverts to Auto immediately.
 //   3. Watchdog: no `heartbeat` for `Defaults.fanWatchdogTimeout` (10 s) → Auto (last resort).
+// After reconnecting the control connection, the app re-sends its current `setMode` (fand
+// reverted to Auto when the old connection dropped).
 // The app uses separate connections: one for `subscribe` (blocked by the stream) and one for
 // `heartbeat`/`setMode`/`status` requests (the control connection).
 

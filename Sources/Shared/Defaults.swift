@@ -61,7 +61,7 @@ public enum Defaults {
     /// Sender-side cap for `AcquireRequest.command` (UTF-8 bytes, incl. truncation marker).
     public static let maxCommandBytes = 4 * 1024
     /// Max concurrent connections per server; excess connections are closed immediately.
-    public static let maxConnections = 32
+    public static let maxConnections = 128
     /// Server-side send timeout on accepted connections: a peer that stops reading (e.g. a
     /// stalled `subscribe` client) makes writes fail with `.timeout`; the connection then ends.
     public static let serverSendTimeout: TimeInterval = 2

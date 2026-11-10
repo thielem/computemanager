@@ -76,6 +76,9 @@ public struct AcquireRequest: Codable, Sendable, Equatable {
 /// and keeping `startedAt`, so the walltime deadline is unchanged. If the gate is off, the
 /// usual stop directives follow on later heartbeats. If the app is unreachable, cgate keeps
 /// the child running and retries at the heartbeat interval.
+/// cgate records its local time when it receives `granted` and uses that as `startedAt` here.
+/// cgate and the hook client retry once (after ~100 ms) on `.closed` (e.g. connection cap hit)
+/// before treating the app as unreachable.
 public struct Reattach: Codable, Sendable, Equatable {
     public var jobId: UUID
     public var startedAt: Date

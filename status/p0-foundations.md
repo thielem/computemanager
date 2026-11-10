@@ -27,7 +27,7 @@ Review of 151c87c. All accepted unless noted:
 1. Accepted: `AcquireRequest.reattach {jobId, startedAt}`; server always grants, keeps jobId + deadline; cgate `unknownJob` behaviour documented (`Reattach`).
 2. Accepted: GateRequest `killJob(KillJobRequest)` and `setSettings(GateSettings)` → `GateStatus`; `GateSettings.slots` added; UI calls ops via `GateService.handle`.
 3. Accepted: accept loop exits only when stopped; transient errors back off 100 ms.
-4. Partly accepted: unauthorized → one reply, then close; max 32 connections (`Defaults.maxConnections`). Idle read timeout REJECTED: subscribers are idle by design.
+4. Partly accepted: unauthorized → one reply, then close; max 128 connections (`Defaults.maxConnections`). Idle read timeout REJECTED: subscribers are idle by design.
 5. Accepted: SO_SNDTIMEO 2 s on accepted fds (`Defaults.serverSendTimeout`); stalled subscriber → push throws `.timeout`, connection ends.
 6. Accepted: `start()` probe-connects; live server → `SocketError.alreadyRunning`; unlink only on ECONNREFUSED; `stop()` of a never-started server no longer unlinks.
 7. Accepted: build-lock atomic stale takeover (mv + rm, retry mkdir); pid-less lock dir older than 10 s is stale.
@@ -37,3 +37,4 @@ Review of 151c87c. All accepted unless noted:
 11. Accepted: `stop()` uses `LineConnection.shutdown()` guarded by the close lock.
 12. Accepted: (a) tickets per (session, cwd), `unknown` never shares (`Ticket.cwd` added); (b) `run --ticket` still queued → busy, ticket kept; (c) `CgateExit.spawnFailed` 70, `interrupted` 130; (d) FanMode.auto doc: Ftst optional.
 13. Accepted: tests for partial/oversized lines, 0.5 s overall deadline (trickle + silent server), timeout 0, stale socket vs alreadyRunning, connection cap + concurrency, unauthorized close, onDisconnect, stalled subscriber. Accept-loop resilience (EMFILE) not unit-tested: needs process-wide RLIMIT changes that would disturb parallel suites.
+Round 2: M1, L1, L2, L3 accepted and fixed
