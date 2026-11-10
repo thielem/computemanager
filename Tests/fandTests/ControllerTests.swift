@@ -171,6 +171,54 @@ private func allAllowed(_ smc: FakeSMC) -> Bool {
         #expect(c.currentMode == .auto && smc.value("F0Md") == 0 && smc.value("F1Md") == 0)
     }
 
+    @Test func inputsAfterShutdownKeepAuto() {
+        let smc = FakeSMC()
+        let c = make(smc)
+        c.setMode(.max, connection: 1, now: t0)
+        c.shutdown()
+        smc.clearWrites()
+        c.setMode(.max, connection: 1, now: t0 + 1)
+        c.heartbeat(connection: 1, now: t0 + 1)
+        c.tick(now: t0 + 2)
+        c.wake(now: t0 + 3)
+        #expect(c.currentMode == .auto && smc.value("F0Md") == 0 && smc.value("F1Md") == 0)
+        #expect(smc.writeLog.isEmpty)
+    }
+
+    @Test func heartbeatFromOtherConnectionDoesNotFeedWatchdog() {
+        let smc = FakeSMC()
+        let c = make(smc)
+        c.setMode(.max, connection: 1, now: t0)
+        c.heartbeat(connection: 2, now: t0 + 8)  // e.g. a second app instance
+        c.tick(now: t0 + 11)
+        #expect(c.currentMode == .auto && smc.value("F0Md") == 0)
+        // The controlling connection's heartbeat does count.
+        c.setMode(.max, connection: 2, now: t0 + 20)
+        c.heartbeat(connection: 2, now: t0 + 28)
+        c.tick(now: t0 + 31)
+        #expect(c.currentMode == .max)
+    }
+
+    @Test func wallClockJumpBackDoesNotDisableWatchdog() {
+        let smc = FakeSMC()
+        let wall = DateBox(t0)
+        let c = FanController(hw: FanHardware.discover(smc), thermal: { .nominal }, wallClock: { wall.value })
+        let mono = Date(timeIntervalSinceReferenceDate: 500)  // watchdog clock (uptime)
+        c.setMode(.max, connection: 1, now: mono)
+        wall.value = t0 - 3600  // user sets the clock back an hour
+        c.tick(now: mono + 11)
+        #expect(c.currentMode == .auto)
+        #expect(c.status().lastHeartbeat == t0)  // display uses the wall clock
+    }
+
+    @Test func startupDiscoveryCanSkipTemps() {
+        let smc = FakeSMC(temps: ["Tp01": 50])
+        let hw = FanHardware.discover(smc, enumerateTemps: false)
+        #expect(hw.fans.count == 2 && hw.pcoreKeys.isEmpty)
+        let full = hw.discoveringTemps()
+        #expect(full.fans == hw.fans && full.pcoreKeys == ["Tp01"])
+    }
+
     @Test func failedWritesDoNotCrashAndRevertTriesAllFans() {
         let smc = FakeSMC()
         let c = make(smc)
@@ -182,11 +230,22 @@ private func allAllowed(_ smc: FakeSMC) -> Bool {
 
     @Test func statusReportsFansAndHeartbeat() {
         let smc = FakeSMC(temps: ["Tp01": 61, "Te05": 40, "Tg0f": 45])
-        let c = make(smc)
-        c.heartbeat(connection: 1, now: t0)
+        let c = FanController(hw: FanHardware.discover(smc), thermal: { .nominal }, wallClock: { t0 })
+        c.setMode(.auto, connection: 1, now: t0)
+        c.heartbeat(connection: 1, now: t0 + 1)
         let s = c.status()
         #expect(s.fans.count == 2 && s.fans[0].minRPM == 2317 && s.fans[0].maxRPM == 6800 && s.fans[0].actualRPM == 2400)
         #expect(s.temps == Temperatures(pcoreMax: 61, ecoreMax: 40, gpuMax: 45))
         #expect(s.lastHeartbeat == t0 && s.curve == Defaults.fanCurve)
+    }
+}
+
+final class DateBox: @unchecked Sendable {  // guarded by `lock`
+    private let lock = NSLock()
+    private var d: Date
+    init(_ d: Date) { self.d = d }
+    var value: Date {
+        get { lock.lock(); defer { lock.unlock() }; return d }
+        set { lock.lock(); d = newValue; lock.unlock() }
     }
 }

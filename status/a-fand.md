@@ -7,7 +7,8 @@
 - `FandService`: FanServer at `Paths.fandSocket` (0666 + peer-UID check: root or console user via SCDynamicStoreCopyConsoleUser), ops status / setMode / heartbeat / subscribe (immediate push, then every tick 2 s + on setMode/revert/wake).
 - CLI: `fand` (daemon), `fand --print-status` (read-only JSON, unprivileged), `fand --revert-auto` (root, one-shot), `fand --version`.
 - `scripts/install.sh`, `scripts/uninstall.sh`, `packaging/launchd/com.computemanager.fand.plist` (not run).
-- Tests: `Tests/fandTests` (28 tests: codec, allowlist, discovery, clamp, curve/hysteresis, modes, watchdog, disconnect, wake, shutdown, socket E2E with fake SMC, peer auth). check.sh green.
+- Review round 1 fixes: shutdown order + `stopped` flag, monotonic watchdog clock, per-controller watchdog, Auto before temp-key enumeration, install-dir ownership check.
+- Tests: `Tests/fandTests` (32 tests: codec, allowlist, discovery, clamp, curve/hysteresis, modes, watchdog, disconnect, wake, shutdown, socket E2E with fake SMC, peer auth). check.sh green.
 - Verified on hardware (read-only): `--print-status` → 2 fans 2317–6800, Ftst absent, Tp=54 Te=3 Tg=10, SMCParam 80 bytes.
 
 ## In progress
@@ -23,4 +24,11 @@
 - none
 
 ## Review triage
-- n/a
+Round 1:
+- 1 signal shutdown race — accepted, fixed: service stopped before `controller.shutdown()`; controller ignores all inputs after shutdown (test `inputsAfterShutdownKeepAuto`).
+- 2 watchdog on wall clock — accepted, fixed: daemon passes `Monotonic.now()` (systemUptime); wall clock only stamps `lastHeartbeat` for display (test `wallClockJumpBackDoesNotDisableWatchdog`).
+- 3 watchdog fed by any connection — accepted, fixed: only the connection that last sent `setMode` feeds the watchdog (test `heartbeatFromOtherConnectionDoesNotFeedWatchdog`). Any control connection disconnecting still reverts (fail-safe).
+- 4 peer auth only at connect (fast user switching) — deferred: single-user machine; revisit if multi-user.
+- 5 Auto only after temp enumeration — accepted, fixed: discover fans, `setAuto()`, then enumerate temp keys.
+- 6 Ftst retry in tick — no action: `Ftst` absent on this hardware (verified), code path unused.
+- 7 install dir ownership — accepted, fixed: `install.sh` aborts unless /usr/local, /usr/local/libexec, target dir (if present) are root-owned, non-symlink, not group/other-writable.

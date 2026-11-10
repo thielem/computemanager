@@ -91,7 +91,7 @@ private func makeService(_ smc: FakeSMC, authorize: @escaping FanServer.Authoriz
         _ = try control.call(.setMode(SetModeRequest(mode: .max)))
         guard case .success(.subscribe(let s1)) = try sub.next().result else { Issue.record("no push"); return }
         #expect(s1.mode == .max)
-        svc.controller.tick(now: Date())
+        svc.controller.tick(now: Monotonic.now())
         guard case .success(.subscribe(let s2)) = try sub.next().result else { Issue.record("no push"); return }
         #expect(s2.mode == .max)
     }
@@ -106,9 +106,9 @@ private func makeService(_ smc: FakeSMC, authorize: @escaping FanServer.Authoriz
         _ = try sub.next()
         #expect(waitUntil { svc.hub.count == 1 })
         sub.close()
-        svc.controller.tick(now: Date())  // push fails → stream ends
+        svc.controller.tick(now: Monotonic.now())  // push fails → stream ends
         #expect(waitUntil {
-            svc.controller.tick(now: Date())
+            svc.controller.tick(now: Monotonic.now())
             return svc.hub.count == 0 && svc.server.connectionCount == 0
         })
     }

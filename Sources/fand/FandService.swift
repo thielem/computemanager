@@ -96,9 +96,9 @@ final class FandService: Sendable {
         case .status:
             return .success(.status(controller.status()))
         case .setMode(let r):
-            return .success(.setMode(controller.setMode(r.mode, connection: ctx.connectionId.raw, now: Date())))
+            return .success(.setMode(controller.setMode(r.mode, connection: ctx.connectionId.raw, now: Monotonic.now())))
         case .heartbeat:
-            controller.heartbeat(connection: ctx.connectionId.raw, now: Date())
+            controller.heartbeat(connection: ctx.connectionId.raw, now: Monotonic.now())
             return .success(.heartbeat)
         case .subscribe:
             let (id, stream) = hub.subscribe()

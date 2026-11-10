@@ -2,12 +2,16 @@ import Foundation
 import Shared
 
 /// fand's fan state machine. All inputs carry `now` (injected clock) so tests drive time.
+/// `now` is the watchdog clock (monotonic in the daemon, see `Monotonic`); `wallClock` only
+/// stamps `FanStatus.lastHeartbeat` for display.
 ///
 /// Safety (FAN-4..7):
 /// - `start` and `shutdown` force Auto.
 /// - A control connection (one that sent `setMode`/`heartbeat`) disconnecting → Auto.
-/// - Watchdog: in a manual mode, no `heartbeat`/`setMode` for `watchdogTimeout` → Auto
-///   (checked on every `tick`, so it fires within timeout + tick).
+/// - Watchdog: in a manual mode, no `setMode`/`heartbeat` from the controlling connection (the one
+///   that last sent `setMode`) for `watchdogTimeout` → Auto (checked on every `tick`, so it fires
+///   within timeout + tick). Heartbeats from other connections don't count.
+/// - After `shutdown` every input is a no-op (fans stay Auto until exit).
 /// - `wake` re-applies the current mode (curve state reset, all keys re-written).
 /// Manual modes are also re-asserted on every tick if the SMC dropped them.
 final class FanController: @unchecked Sendable {  // all state guarded by `lock`
@@ -16,10 +20,14 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
     let watchdogTimeout: TimeInterval
     private let thermal: @Sendable () -> ThermalState
     private let log: @Sendable (String) -> Void
+    private let wallClock: @Sendable () -> Date
 
     private let lock = NSLock()
     private var mode: FanMode = .auto
-    private var lastHeartbeat: Date?
+    private var lastHeartbeat: Date?       // watchdog clock
+    private var lastHeartbeatWall: Date?   // display only
+    private var controllingConnection: UInt64?
+    private var stopped = false
     private var controlConnections: Set<UInt64> = []
     private var curveState: CurveState
     private var last: FanStatus
@@ -30,12 +38,14 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
          watchdogTimeout: TimeInterval = Defaults.fanWatchdogTimeout,
          thermal: @escaping @Sendable () -> ThermalState = { ThermalState(ProcessInfo.processInfo.thermalState) },
          log: @escaping @Sendable (String) -> Void = { _ in },
+         wallClock: @escaping @Sendable () -> Date = { Date() },
          onChange: @escaping @Sendable (FanStatus) -> Void = { _ in }) {
         self.hw = hw
         self.curve = curve
         self.watchdogTimeout = watchdogTimeout
         self.thermal = thermal
         self.log = log
+        self.wallClock = wallClock
         self.onChange = onChange
         self.curveState = CurveState(curve: curve)
         self.last = FanStatus(mode: .auto, fans: [], temps: Temperatures(), thermalState: .nominal,
@@ -51,14 +61,16 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
 
     /// Daemon exit (SIGTERM/SIGINT): force Auto (FAN-6).
     func shutdown() {
-        run { revertLocked("shutdown"); return last }
+        run { revertLocked("shutdown"); stopped = true; return last }
     }
 
     @discardableResult
     func setMode(_ m: FanMode, connection: UInt64?, now: Date) -> FanStatus {
         run {
+            guard !stopped else { return last }
             if let connection { controlConnections.insert(connection) }
-            lastHeartbeat = now
+            controllingConnection = connection
+            beatLocked(now)
             if m != mode {
                 log("setMode \(mode.rawValue) -> \(m.rawValue)")
                 mode = m
@@ -71,9 +83,9 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
 
     func heartbeat(connection: UInt64?, now: Date) {
         run(notify: false) {
+            guard !stopped else { return last }
             if let connection { controlConnections.insert(connection) }
-            lastHeartbeat = now
-            last.lastHeartbeat = now
+            if connection == controllingConnection { beatLocked(now) }
             return last
         }
     }
@@ -81,7 +93,7 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
     /// A connection closed. Control connection → Auto (FAN-4: app crashed or quit).
     func disconnected(connection: UInt64) {
         run {
-            guard controlConnections.remove(connection) != nil else { return last }
+            guard !stopped, controlConnections.remove(connection) != nil else { return last }
             if mode != .auto { revertLocked("control connection closed") }
             return last
         }
@@ -91,6 +103,7 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
     @discardableResult
     func tick(now: Date) -> FanStatus {
         run {
+            guard !stopped else { return last }
             if mode != .auto, now.timeIntervalSince(lastHeartbeat ?? .distantPast) > watchdogTimeout {
                 revertLocked("watchdog: no heartbeat for \(Int(watchdogTimeout)) s")
                 return last
@@ -102,6 +115,7 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
     /// System woke: SMC may have reset fan keys → re-apply (FAN-7).
     func wake(now: Date) {
         _ = run {
+            guard !stopped else { return last }
             log("wake: re-applying \(mode.rawValue)")
             curveState.reset()
             if mode == .auto { revertLocked(nil) } else { return applyLocked() }
@@ -129,6 +143,12 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
         return s
     }
 
+    private func beatLocked(_ now: Date) {
+        lastHeartbeat = now
+        lastHeartbeatWall = wallClock()
+        last.lastHeartbeat = lastHeartbeatWall
+    }
+
     /// Force Auto, then refresh `last`. `reason` nil = don't log.
     private func revertLocked(_ reason: String?) {
         if let reason { log("revert to auto (\(reason))") }
@@ -141,7 +161,7 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
     @discardableResult
     private func refreshLocked() -> FanStatus {
         last = FanStatus(mode: mode, fans: hw.readFans(), temps: hw.readTemps(), thermalState: thermal(),
-                         lastHeartbeat: lastHeartbeat, curve: curve)
+                         lastHeartbeat: lastHeartbeatWall, curve: curve)
         return last
     }
 

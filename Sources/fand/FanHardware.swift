@@ -34,7 +34,8 @@ final class FanHardware: Sendable {
 
     /// Discover fans (`FNum`, `F{n}Mn/Mx`), `Ftst` presence and temperature keys (`Tp*` P-core,
     /// `Te*` E-core, `Tg*` GPU). Fans with unreadable or nonsensical min/max are skipped.
-    static func discover(_ smc: SMCKeyIO) -> FanHardware {
+    /// `enumerateTemps: false` skips the (slow) key enumeration so the daemon can force Auto first.
+    static func discover(_ smc: SMCKeyIO, enumerateTemps: Bool = true) -> FanHardware {
         let n = Int((try? smc.read("FNum")) ?? 0)
         var fans: [FanSpec] = []
         for f in 0..<min(max(n, 0), 10) {
@@ -42,8 +43,15 @@ final class FanHardware: Sendable {
                   mn >= 0, mx > mn, mx < 20_000 else { continue }
             fans.append(FanSpec(id: f, minRPM: mn, maxRPM: mx))
         }
+        let hw = FanHardware(smc: smc, fans: fans, hasFtst: smc.exists("Ftst"),
+                             pcoreKeys: [], ecoreKeys: [], gpuKeys: [])
+        return enumerateTemps ? hw.discoveringTemps() : hw
+    }
+
+    /// Same fans, with temperature keys enumerated.
+    func discoveringTemps() -> FanHardware {
         let temps = (try? smc.keys(withPrefixes: ["Tp", "Te", "Tg"])) ?? []
-        return FanHardware(smc: smc, fans: fans, hasFtst: smc.exists("Ftst"),
+        return FanHardware(smc: smc, fans: fans, hasFtst: hasFtst,
                            pcoreKeys: temps.filter { $0.hasPrefix("Tp") },
                            ecoreKeys: temps.filter { $0.hasPrefix("Te") },
                            gpuKeys: temps.filter { $0.hasPrefix("Tg") })

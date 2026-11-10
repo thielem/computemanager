@@ -10,6 +10,12 @@ enum Log {
     }
 }
 
+/// Watchdog clock: seconds since boot as a `Date`. Unaffected by wall-clock changes; only
+/// differences between two values are meaningful (never put it on the wire).
+enum Monotonic {
+    static func now() -> Date { Date(timeIntervalSinceReferenceDate: ProcessInfo.processInfo.systemUptime) }
+}
+
 /// Long-running daemon: SMC, controller, socket, tick timer, signals, wake.
 final class Daemon: @unchecked Sendable {  // fields set once in run() on the main thread
     private var service: FandService?
@@ -23,12 +29,15 @@ final class Daemon: @unchecked Sendable {  // fields set once in run() on the ma
             Log.line("cannot open SMC: \(error)")
             exit(1)
         }
-        let hw = FanHardware.discover(smc)
+        // Force Auto before the slow temperature-key enumeration (FAN-6).
+        let fansOnly = FanHardware.discover(smc, enumerateTemps: false)
+        for e in fansOnly.setAuto() { Log.line("startup revert error: \(e)") }
+        let hw = fansOnly.discoveringTemps()
         Log.line("start: fans=\(hw.fans.map { "\($0.id):\(Int($0.minRPM))-\(Int($0.maxRPM))" }) ftst=\(hw.hasFtst) "
                  + "temps Tp=\(hw.pcoreKeys.count) Te=\(hw.ecoreKeys.count) Tg=\(hw.gpuKeys.count)")
         let hub = StatusHub()
         let controller = FanController(hw: hw, log: Log.line, onChange: { hub.publish($0) })
-        controller.start(now: Date())  // FAN-6
+        controller.start(now: Monotonic.now())  // FAN-6
 
         // Signals first, so a SIGTERM during startup still reverts.
         for sig in [SIGTERM, SIGINT, SIGHUP] {
@@ -36,8 +45,8 @@ final class Daemon: @unchecked Sendable {  // fields set once in run() on the ma
             let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             src.setEventHandler { [weak self] in
                 Log.line("signal \(sig): reverting to auto and exiting")
+                self?.service?.stop()  // no more requests, then revert (controller ignores late ones)
                 controller.shutdown()
-                self?.service?.stop()
                 exit(0)
             }
             src.resume()
@@ -60,11 +69,11 @@ final class Daemon: @unchecked Sendable {  // fields set once in run() on the ma
 
         let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "fand.tick"))
         t.schedule(deadline: .now() + controller.curve.tick, repeating: controller.curve.tick, leeway: .milliseconds(100))
-        t.setEventHandler { controller.tick(now: Date()) }
+        t.setEventHandler { controller.tick(now: Monotonic.now()) }
         t.resume()
         timer = t
 
-        let p = PowerObserver { controller.wake(now: Date()) }
+        let p = PowerObserver { controller.wake(now: Monotonic.now()) }
         if !p.start() { Log.line("warning: IORegisterForSystemPower failed; relying on per-tick re-apply") }
         power = p
 
@@ -78,7 +87,10 @@ enum OneShot {
     static func printStatus() -> Int32 {
         do {
             let smc = try AppleSMC()
-            let hw = FanHardware.discover(smc)
+            // Force Auto before the slow temperature-key enumeration (FAN-6).
+        let fansOnly = FanHardware.discover(smc, enumerateTemps: false)
+        for e in fansOnly.setAuto() { Log.line("startup revert error: \(e)") }
+        let hw = fansOnly.discoveringTemps()
             let s = FanStatus(mode: .auto, fans: hw.readFans(), temps: hw.readTemps(),
                               thermalState: ThermalState(ProcessInfo.processInfo.thermalState),
                               lastHeartbeat: nil)

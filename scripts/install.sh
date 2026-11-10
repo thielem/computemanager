@@ -21,6 +21,17 @@ if [[ -z "${SUDO_USER:-}" || "$SUDO_USER" == root ]]; then
   exit 1
 fi
 
+# A root daemon binary must not live under a path a non-root user can modify (binary swap).
+for d in /usr/local /usr/local/libexec "$DEST_DIR"; do
+  [[ -e "$d" ]] || continue  # created below as root:wheel 0755
+  read -r uid perm < <(stat -f '%u %Lp' "$d")
+  if [[ -L "$d" || "$uid" != 0 || $(( 8#$perm & 8#022 )) != 0 ]]; then
+    echo "install: unsafe install dir $d (owner uid $uid, mode $perm, or symlink); needs root-owned, not group/other-writable." >&2
+    echo "install: fix with: sudo chown root:wheel $d && sudo chmod go-w $d" >&2
+    exit 1
+  fi
+done
+
 say "building fand (release) as $SUDO_USER"
 sudo -H -u "$SUDO_USER" scripts/swiftw build -c release --product fand
 BIN_DIR=$(sudo -H -u "$SUDO_USER" scripts/swiftw build -c release --show-bin-path)
