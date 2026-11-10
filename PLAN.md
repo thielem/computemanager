@@ -10,7 +10,7 @@
 | Agents in scope | Claude Code only (for now) |
 | Core use case | User needs the machine (e.g. video call) → flip gate off, fans to Auto |
 | Distribution | Local build, ad-hoc signed (`codesign -s -`), no notarization |
-| Status | Planning; repo empty |
+| Status | M0 spikes passed; M1 foundations in progress |
 
 ### Terms
 
@@ -39,7 +39,7 @@ Priority: M = must, S = should, C = could.
 | FAN-1 | Modes: Auto (Apple default), Performance (custom curve), Max (all fans max RPM) | M |
 | FAN-2 | Performance curve: hottest P-core temp; ≤55 °C → min RPM, linear to max RPM at 85 °C; 3 °C hysteresis; 2 s tick | M |
 | FAN-3 | Performance: `thermalState ≥ .serious` → force max RPM | M |
-| FAN-4 | SAFETY: fans revert to Auto (`F*Md=0`, `Ftst=0`) on app quit, crash, or disconnect | M |
+| FAN-4 | SAFETY: fans revert to Auto (`F*Md=0`; `Ftst=0` only if the key exists) on app quit, crash, or disconnect | M |
 | FAN-5 | SAFETY: app heartbeat every 2 s; fand reverts to Auto after 10 s without heartbeat | M |
 | FAN-6 | SAFETY: fand reverts to Auto on start and on SIGTERM; after reboot = Auto | M |
 | FAN-7 | Re-apply manual mode after sleep/wake (SMC resets) | M |
@@ -81,7 +81,7 @@ Priority: M = must, S = should, C = could.
 | AGENT-7 | Hook latency ~ms; app unreachable → fail-open | M |
 | AGENT-8 | Claude Code plugin (user scope): hooks.json + skill `compute-gate` + cgate on PATH | M |
 | AGENT-9 | `cgate status` (gate state, slots, running jobs, ETA) | S |
-| AGENT-10 | Secondary notice channel via Claude Code messaging socket (if M0b spike succeeds) | C |
+| AGENT-10 | Secondary notice channel via Claude Code messaging socket (M0b succeeded, see M0 findings) | C |
 | AGENT-11 | Optional CLAUDE.md snippet explaining etiquette | S |
 
 ### UI
@@ -242,8 +242,8 @@ Persisted: settings + enabled/slots (UserDefaults). Leases in memory; cgate re-r
 | Meeting preset | Gate No more + fand `setMode auto` |
 | Notice delivery | Next tool call → `"*"` hook `hookCheck` → deny once with notice text → notice cleared. Caveat: agent sees it only between tool calls; a foreground `cgate run` blocks it until exit → skill mandates background runs |
 | App down | cgate connect fails → allow, append to `~/Library/Logs/ComputeManager/cgate-fallback.log` |
-| Fan mode set | UI → `setMode` → fand: `Ftst=1`, `F*Md=1`, `F*Tg` per tick |
-| Fan safety | No heartbeat 10 s / SIGTERM / start / app quit → `F*Md=0`, `Ftst=0` |
+| Fan mode set | UI → `setMode` → fand: (`Ftst=1` if key exists), `F*Md=1` (ui8), `F*Tg` (flt) per tick |
+| Fan safety | No heartbeat 10 s / SIGTERM / start / app quit → `F*Md=0` (+ `Ftst=0` if key exists) |
 | Wake | fand observes wake → re-apply current mode |
 
 ## 7. Tech stack
@@ -298,7 +298,7 @@ PLAN.md  TODO.md  CONVENTIONS.md
 | Peer auth | `getpeereid`/`LOCAL_PEERCRED` UID == console user; reject otherwise |
 | Socket perms | fand.sock in `/var/run/computemanager/` (root-owned dir 0755, socket restrictive); gate.sock 0600 in user dir |
 | Fail-safe fans | Watchdog 10 s, revert on start/SIGTERM/quit; reboot = Auto |
-| SMC key allowlist | fand writes only `Ftst`, `F{n}Md`, `F{n}Tg` |
+| SMC key allowlist | fand writes only `F{n}Md`, `F{n}Tg`, and `Ftst` only if present |
 | Target clamp | `F{n}Tg` clamped to `[F{n}Mn, F{n}Mx]` |
 | Input validation | Max line length, schema-checked JSON, version field |
 | Fail-open gate | Gate never blocks the user's own work when app is down |
@@ -308,9 +308,9 @@ PLAN.md  TODO.md  CONVENTIONS.md
 ## 10. Milestones
 
 ### M0 — Spikes
-- [ ] (a) Minimal root CLI `spikes/smc-probe` (user runs it once, no curve tests, no repeats): read fans → Max ≤10 s → read RPM → restore Auto (`F*Md=0`, `Ftst=0`)
-- [ ] (b) Probe `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN` from a Bash child: wire format, delivery timing
-- [ ] (a) fails → back to user (O6); otherwise continue. Gate work proceeds regardless
+- [x] (a) Minimal root CLI `spikes/smc-probe` (user runs it once, no curve tests, no repeats): read fans → Max ≤10 s → read RPM → restore Auto (`F*Md=0`, `Ftst=0`)
+- [x] (b) Probe `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN` from a Bash child: wire format, delivery timing
+- [x] (a) fails → dig deeper (O6: fan control is a must, no read-only fallback). Gate work proceeds regardless
 
 ### M1 — Foundations
 - [ ] SwiftPM skeleton (targets above)
@@ -330,11 +330,27 @@ PLAN.md  TODO.md  CONVENTIONS.md
 - [ ] Review loop (max 2 rounds)
 - [ ] E2E with real Claude Code session: busy feedback + ticket wake-up, walltime soft→hard, soft stop, hard stop, notice delivery, fan revert on app quit/kill -9
 
+### M0 findings (passed, macOS 27.0.1, Mac14,9)
+
+| Topic | Finding |
+|---|---|
+| `Ftst` | Key does not exist on this SMC. fand treats it as optional: write/restore only if present |
+| Manual mode | `F{n}Md=1` (ui8), then `F{n}Tg` (flt) works directly; 4'300 → 6'500 RPM in ~2 s |
+| Restore | `F{n}Md=0` returns fans to Apple control |
+| Fans | 2 fans; `F{n}Mn` 2317, `F{n}Mx` 6800 RPM |
+| SMC struct | `SMCParamStruct` needs explicit padding to be 80 bytes. Reference: branch `main--m0-spike`, `spikes/fanprobe/fanprobe.swift` |
+| Messaging socket | `/tmp/cc-socks/<claude-pid>.sock` (= `$CLAUDE_CODE_MESSAGING_SOCKET`). NDJSON: first `{"type":"auth","token":"$CLAUDE_CODE_MESSAGING_TOKEN"}`, then `{"type":"user","message":{"role":"user","content":"..."}}`. Reaches idle sessions too → AGENT-10 viable |
+| Process tree | Background Bash: `sleep` → `zsh` (own process-group leader) → `claude`. cgate still spawns its child in a new pgid and kills only that |
+
 Process: continue past M0 unless fan writes fail; status updates in chat only, no waiting.
 
 ## 11. Open decisions
 
-| # | Decision | Default |
+None open.
+
+### Resolved
+
+| # | Decision | Resolution |
 |---|---|---|
-| O6 | Fan writes don't work on macOS 27 | Back to user; ship gate only, fan section read-only |
+| O6 | Fan writes don't work on macOS 27 | Fan control is a must; if writes fail on macOS 27 we dig deeper. No read-only fallback |
 | O7 | Plugin name | `compute-gate` |
