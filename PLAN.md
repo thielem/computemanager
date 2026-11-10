@@ -310,7 +310,7 @@ PLAN.md  TODO.md  CONVENTIONS.md
 ### M0 — Spikes
 - [ ] (a) Minimal root CLI `spikes/smc-probe` (user runs it once, no curve tests, no repeats): read fans → Max ≤10 s → read RPM → restore Auto (`F*Md=0`, `Ftst=0`)
 - [ ] (b) Probe `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN` from a Bash child: wire format, delivery timing
-- [ ] (a) fails → back to user (O6); otherwise continue. Gate work proceeds regardless
+- [ ] (a) fails → dig deeper (O6: fan control is a must, no read-only fallback). Gate work proceeds regardless
 
 ### M1 — Foundations
 - [ ] SwiftPM skeleton (targets above)
@@ -334,7 +334,11 @@ Process: continue past M0 unless fan writes fail; status updates in chat only, n
 
 ## 11. Open decisions
 
-| # | Decision | Default |
+None open.
+
+### Resolved
+
+| # | Decision | Resolution |
 |---|---|---|
-| O6 | Fan writes don't work on macOS 27 | Back to user; ship gate only, fan section read-only |
+| O6 | Fan writes don't work on macOS 27 | Fan control is a must; if writes fail on macOS 27 we dig deeper. No read-only fallback |
 | O7 | Plugin name | `compute-gate` |

@@ -8,7 +8,7 @@
 | 4 | Approve launch-at-login (System Settings → General → Login Items) | First app launch | Open |
 | 5 | Install plugin: `claude plugin install …` (user scope) | After package C | Open |
 | 6 | Decide: add CLAUDE.md snippet globally (`~/.claude/CLAUDE.md`) or rely on plugin skill | Before E2E | Open |
-| 7 | Confirm plugin name (O7) | Before package C | Open |
+| 7 | Confirm plugin name (O7) | Before package C | Done (`compute-gate`) |
 
 ## Back out
 
