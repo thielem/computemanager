@@ -7,7 +7,7 @@ struct GateSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label(Self.levelName(gate.switchOn ? .on : gate.status.level),
+                Label(Self.levelName(gate.switchOn ? .on : (gate.status.level.isOff ? gate.status.level : .noMore)),
                       systemImage: gate.switchOn ? "bolt.fill" : "bolt.slash.fill")
                     .foregroundStyle(gate.switchOn ? .primary : .secondary)
                 Spacer()
