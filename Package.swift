@@ -21,6 +21,8 @@ let package = Package(
         // CLI used by hooks and agents. Logic lives in CgateKit-style files inside the
         // target; tests use @testable import.
         .executableTarget(name: "cgate", dependencies: ["Shared"]),
+        // DEBUG/E2E only: headless GateService host + control CLI (scripts/e2e). Not a product.
+        .executableTarget(name: "gatehost", dependencies: ["Shared", "GateCore"]),
         .testTarget(name: "SharedTests", dependencies: ["Shared"]),
         .testTarget(name: "GateCoreTests", dependencies: ["GateCore", "Shared"]),
         .testTarget(name: "cgateTests", dependencies: ["cgate", "Shared", "GateCore"]),
