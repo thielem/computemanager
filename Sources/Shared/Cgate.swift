@@ -35,10 +35,10 @@ public enum CgateExit {
 }
 
 public enum CgateMessage {
-    /// Exit 76; also the `off` text in `acquire` and the hook deny reason.
+    /// Exit 76; also the `off` text in `acquire`; `cgate run` reports it.
     public static let gateOff = "Compute gate off — continue without heavy runs or stop and report"
 
-    /// Exit 75; also the hook deny reason when busy.
+    /// Exit 75; also printed by `cgate run` when busy.
     public static func busy(_ t: TicketInfo) -> String {
         "compute busy: ticket \(t.id), position \(t.position), next slot ~\(clock(t.eta)). "
             + "Run in background: cgate wait --ticket \(t.id); do other work meanwhile"

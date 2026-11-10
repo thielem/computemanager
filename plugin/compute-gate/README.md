@@ -9,15 +9,15 @@ Hooks + skill that route heavy agent commands through Compute Manager's gate.
 
 ## Install
 
-1. Build and put `cgate` on `PATH` (hooks and wrapped commands call it by name):
+1. Install `cgate` to `~/.local/bin/cgate` (the hook calls it from there; silent if missing):
    ```sh
-   scripts/swiftw build -c release --product cgate
-   ln -sf "$PWD/.build/release/cgate" ~/.local/bin/cgate
+   scripts/install-cgate.sh
    ```
-2. Load the plugin, either
-   - for one session: `claude --plugin-dir /path/to/computemanager/plugin/compute-gate`, or
-   - permanently: add a local marketplace that lists this directory, then
-     `claude plugin install compute-gate@<marketplace>` (user scope).
+2. Add the marketplace and install the plugin:
+   ```sh
+   claude plugin marketplace add ~/Documents/GitHub/computemanager
+   claude plugin install compute-gate@computemanager
+   ```
 3. Start ComputeManager.app. Without it, `cgate` fails open (commands run ungated and are
    logged to `~/Library/Logs/ComputeManager/cgate-fallback.log`).
 
