@@ -25,7 +25,9 @@ check() { local d=$1; shift; if "$@"; then ok "$d"; else bad "$d"; fi; }
 has()  { grep -qE -- "$2" "$1"; }
 
 start_host() {  # start_host [gatehost serve options…]
-  iso "$BIN/gatehost" serve --socket "$SOCK" "$@" >>"$HOSTLOG" 2>&1 &
+  # Not via iso(): a backgrounded function is a subshell, so $! would not be gatehost.
+  env "${STRIP[@]}" HOME="$E2E_HOME" CFFIXED_USER_HOME="$E2E_HOME" \
+    "$BIN/gatehost" serve --socket "$SOCK" "$@" >>"$HOSTLOG" 2>&1 &
   HOST_PID=$!
   for _ in $(seq 50); do [[ -S "$SOCK" ]] && return 0; sleep 0.1; done
   echo "gatehost did not start"; cat "$HOSTLOG"; exit 1
