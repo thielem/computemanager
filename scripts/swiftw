@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# `swift` under the project-wide build lock. Usage: scripts/swiftw build | test --filter X | run cgate …
+set -euo pipefail
+cd "$(dirname "$0")/.."
+source scripts/build-lock.sh
+cm_lock
+swift "$@"
