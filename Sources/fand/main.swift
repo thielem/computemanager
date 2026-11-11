@@ -15,7 +15,8 @@ case "--print-status":
 case "--revert-auto":
     exit(OneShot.revertAuto())
 case nil:
-    Daemon().run()
+    let daemon = Daemon()  // strong ref for the process lifetime (handlers use self)
+    daemon.run()
 case let other?:
     FileHandle.standardError.write(Data("fand: unknown argument \(other)\nusage: fand [--print-status | --revert-auto | --version]\n".utf8))
     exit(64)
