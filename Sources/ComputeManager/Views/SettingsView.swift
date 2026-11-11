@@ -17,25 +17,18 @@ struct SettingsView: View {
             Toggle("Launch at login", isOn: Binding(get: { loginEnabled }, set: setLogin))
 
             Section("Runtime") {
-                Stepper(value: minutes(\.defaultMaxRuntimeSeconds), in: 1...cap) {
-                    LabeledContent("Default max", value: "\(Int(settings.defaultMaxRuntimeSeconds / 60)) min")
-                }
-                Stepper(value: minutes(\.maxRuntimeCapSeconds), in: 5...Self.capLimit, step: 5) {
-                    LabeledContent("Cap", value: "\(Int(settings.maxRuntimeCapSeconds / 60)) min")
-                }
+                stepRow("Default max", "\(Int(settings.defaultMaxRuntimeSeconds / 60)) min",
+                        minutes(\.defaultMaxRuntimeSeconds), 1...cap)
+                stepRow("Cap", "\(Int(settings.maxRuntimeCapSeconds / 60)) min",
+                        minutes(\.maxRuntimeCapSeconds), 5...Self.capLimit, step: 5)
             }
 
             Section {
-                Stepper(value: curveValue(\.lowTemp), in: FanCurve.lowTempRange) {
-                    LabeledContent("Start", value: "\(Int(fan.curve.lowTemp)) °C")
-                }
-                Stepper(value: curveValue(\.highTemp),
-                        in: (fan.curve.lowTemp + FanCurve.minSpan)...FanCurve.highTempMax) {
-                    LabeledContent("Full speed", value: "\(Int(fan.curve.highTemp)) °C")
-                }
-                Stepper(value: curveValue(\.hysteresis), in: FanCurve.hysteresisRange) {
-                    LabeledContent("Hysteresis", value: "\(Int(fan.curve.hysteresis)) °C")
-                }
+                stepRow("Start", "\(Int(fan.curve.lowTemp)) °C", curveValue(\.lowTemp), FanCurve.lowTempRange)
+                stepRow("Full speed", "\(Int(fan.curve.highTemp)) °C", curveValue(\.highTemp),
+                        (fan.curve.lowTemp + FanCurve.minSpan)...FanCurve.highTempMax)
+                stepRow("Hysteresis", "\(Int(fan.curve.hysteresis)) °C", curveValue(\.hysteresis),
+                        FanCurve.hysteresisRange)
             } header: {
                 HStack {
                     Text("Performance")
@@ -66,7 +59,22 @@ struct SettingsView: View {
         .frame(width: 400, height: 640)
         .onAppear { reloadPatterns() }
         .onDisappear { commitPatterns() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in commitPatterns() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            loginEnabled = SMAppService.mainApp.status == .enabled
+        }
         .onChange(of: settings.patterns) { if !editing { reloadPatterns() } }
+    }
+
+    private func stepRow<V: Strideable>(_ label: String, _ value: String, _ binding: Binding<V>,
+                                        _ range: ClosedRange<V>, step: V.Stride = 1) -> some View
+        where V.Stride: ExpressibleByIntegerLiteral {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value).monospacedDigit().foregroundStyle(.secondary)
+            Stepper("", value: binding, in: range, step: step).labelsHidden()
+        }
     }
 
     private var settings: GateSettings { gate.status.settings }
