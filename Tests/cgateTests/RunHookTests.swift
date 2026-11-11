@@ -127,6 +127,26 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         #expect(await h.status().tickets.isEmpty)
     }
 
+    @Test func signalBeforeSpawnReleasesGrantAndNeverSpawns() async throws {
+        let h = try Harness()
+        let w = WaitingTicket(link: h.link)
+        w.beginAcquire()
+        #expect(await offPool { !w.abort(SIGINT) })  // reply in flight: the run loop handles it
+        guard case .success(.acquire(.granted(let id, _))) = await h.svc.handle(
+            .acquire(AcquireRequest(sessionId: "x", cwd: "/x", command: "make", pid: 1))) else { Issue.record("grant"); return }
+        #expect(w.endAcquire(granted: id) == SIGINT)
+        await offPool { w.abortNow() }
+        #expect(await h.status().leases.isEmpty)
+        #expect(w.beginSpawn() == SIGINT)
+
+        let w2 = WaitingTicket(link: h.link)
+        #expect(await offPool { w2.abort(SIGTERM) })  // not acquiring, not spawned: exit now
+        #expect(w2.beginSpawn() == SIGTERM)
+        let w3 = WaitingTicket(link: h.link)
+        #expect(w3.beginSpawn() == nil)
+        #expect(!w3.abort(SIGHUP))  // spawned: forward instead
+    }
+
     @Test func hardStopKillsProcessGroup() async throws {
         let h = try Harness()
         let ctx = h.ctx()

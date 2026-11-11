@@ -530,6 +530,8 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
         #expect(CommandMatcher.cgateRunCommands("cgate run -- make all >log") == ["make all"])
         #expect(CommandMatcher.cgateRunCommands("cgate status; cgate wait --ticket t1; ls") == [])
         #expect(CommandMatcher.cgateRunCommands("echo 'cgate run -- x'") == [])
+        #expect(CommandMatcher.cgateRunCommands("cgate run -- grep -c '<div' f") == ["grep -c '<div' f"])
+        #expect(CommandMatcher.cgateRunCommands("cgate run -- echo \\>x") == ["echo '>x'"])
     }
 
     let p = Defaults.autoWrapPatterns

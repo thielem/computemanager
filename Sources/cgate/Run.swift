@@ -43,8 +43,8 @@ enum Runner {
                                  messagingSocket: ctx.env[ClaudeMessaging.socketEnv],
                                  label: GitLabel.compute(cwd: ctx.cwd))
 
-        // Signal handlers before acquire/spawn (L3); the forwarder kills once the pid is known.
-        // While `--wait` waits, a signal cancels the ticket and exits 128 + signal.
+        // Signal handlers before acquire/spawn (L3). Before the child is spawned a signal cancels
+        // the ticket / releases a granted lease and exits 128 + signal; after, it is forwarded.
         let fwd = Forwarder(grace: ctx.killGrace)
         let waiting = WaitingTicket(link: ctx.link)
         var signalSources: [DispatchSourceSignal] = []
@@ -53,7 +53,7 @@ enum Runner {
                 signal(sig, SIG_IGN)
                 let s = DispatchSource.makeSignalSource(signal: sig, queue: .global())
                 s.setEventHandler {
-                    if waiting.cancel() { exit(128 + sig) }
+                    if waiting.abort(sig) { exit(128 + sig) }
                     fwd.forward(sig)
                 }
                 s.resume()
@@ -65,9 +65,16 @@ enum Runner {
         var job: (id: UUID, max: TimeInterval, startedAt: Date)?
         var announced = false
         acquiring: while true {
-            switch try? ctx.link.call(.acquire(acq)) {
+            waiting.beginAcquire()
+            let reply = try? ctx.link.call(.acquire(acq))
+            var grantedId: UUID?
+            if case .acquire(.granted(let id, _))? = reply { grantedId = id }
+            if let s = waiting.endAcquire(granted: grantedId) {  // signalled while the reply was in flight
+                waiting.abortNow()
+                return 128 + s
+            }
+            switch reply {
             case .acquire(.granted(let id, let max))?:
-                waiting.set(nil)
                 job = (id, max, Date())
             case .acquire(.busy(let t))?:
                 guard o.wait else {
@@ -99,6 +106,10 @@ enum Runner {
             break
         }
 
+        if let s = waiting.beginSpawn() {  // signalled before spawn: never run the job
+            waiting.abortNow()
+            return 128 + s
+        }
         guard let pid = spawn(argv, env: ctx.env) else {
             ctx.stderr("cgate: cannot run \(argv[0])")
             if let job { _ = try? ctx.link.call(.release(ReleaseRequest(jobId: job.id, exitCode: nil, reason: .spawnFailed))) }
@@ -276,15 +287,60 @@ final class Forwarder: @unchecked Sendable {  // guarded by lock
     }
 }
 
-/// The ticket a `run --wait` is waiting on; `cancel` tells the gate it was abandoned (once).
+/// Pre-spawn state shared with the signal handlers: the ticket a `run --wait` is waiting on
+/// (`cancel` tells the gate it was abandoned, once), the granted lease, and a signal that
+/// arrived before the child was spawned.
 final class WaitingTicket: @unchecked Sendable {  // guarded by lock
     private let lock = NSLock()
     private let link: GateLink
     private var ticket: String?
+    private var job: UUID?
+    private var inAcquire = false
+    private var spawned = false
+    private var aborted: Int32?
 
     init(link: GateLink) { self.link = link }
 
     func set(_ t: String?) { lock.withLock { ticket = t } }
+
+    func beginAcquire() { lock.withLock { inAcquire = true } }
+
+    /// Acquire reply handled; records a granted lease. Returns the signal if one arrived meanwhile.
+    func endAcquire(granted id: UUID?) -> Int32? {
+        lock.withLock {
+            inAcquire = false
+            if let id { job = id; ticket = nil }
+            return aborted
+        }
+    }
+
+    /// About to spawn: nil, or the signal that aborted the run (then do not spawn).
+    func beginSpawn() -> Int32? {
+        lock.withLock {
+            if aborted == nil { spawned = true }
+            return aborted
+        }
+    }
+
+    /// Signal handler: true → the caller exits now (ticket cancelled, lease released). False once
+    /// the child is spawned (forward instead) or while an acquire reply is in flight (the run
+    /// loop sees the signal in `endAcquire`).
+    func abort(_ sig: Int32) -> Bool {
+        let now: Bool = lock.withLock {
+            guard !spawned else { return false }
+            if aborted == nil { aborted = sig }
+            return !inAcquire
+        }
+        if now { abortNow() }
+        return now
+    }
+
+    /// Cancel the ticket and release a granted lease (each once).
+    func abortNow() {
+        cancel()
+        guard let j = lock.withLock({ () -> UUID? in defer { job = nil }; return job }) else { return }
+        _ = try? link.call(.release(ReleaseRequest(jobId: j, exitCode: nil, reason: .interrupted)), timeout: 2)
+    }
 
     /// True if a ticket was being waited on (and is now cancelled).
     @discardableResult

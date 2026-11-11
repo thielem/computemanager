@@ -40,3 +40,4 @@
 
 ## Review triage
 Round 1: all findings accepted and fixed: e2e busy regex and grep -E parens; exact subagent attribution; 0 slots = closed; `run --wait` ticket cancel; ended-lease notices; flaky `hardStopKillsProcessGroup` (now `eventually`); menu chrome (NSStatusItem + NSPopover). Low #6 ("subagent notices arrive only on the subagent's next tool call") is by design: subagent notices are never pushed, because the session socket would deliver them to the parent.
+Round 2 lows fixed: quoted words after `cgate run --` are never dropped as redirections (`grep -c '<div' f`); a signal before spawn exits 128 + signal without spawning, cancelling the ticket and releasing a lease granted in the same window.
