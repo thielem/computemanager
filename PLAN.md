@@ -72,7 +72,7 @@ Priority: M = must, S = should, C = could.
 | AGENT-1 | `cgate run [--max <dur>] [--session <id>] [--ticket <id>] -- <cmd>` | M |
 | AGENT-1a | `cgate wait --ticket <id>`: blocks until slot reserved for ticket (exit 0, "slot ready, held until HH:MM — claim with `cgate run --ticket <id>`") or ticket expires (exit 79) | M |
 | AGENT-1b | Busy message tells agent to run `cgate wait --ticket <id>` in background; Claude Code's background-task completion re-invokes the agent | M |
-| AGENT-2 | PreToolUse Bash hook never rewrites and never answers allow: a heavy unwrapped command is denied with a copyable `cgate run --max <est> -- '<cmd>'` suggestion; app unreachable → hook silent; busy/off are reported by `cgate run` itself | M
+| AGENT-2 | PreToolUse Bash hook never rewrites and never answers allow: a heavy unwrapped command is denied with a copyable `cgate run --max <est> -- '<cmd>'` suggestion; app unreachable → hook silent; busy/off are reported by `cgate run` itself | M |
 | AGENT-3 | Already-wrapped commands pass through unchanged | M |
 | AGENT-4 | Auto pattern list (editable): pytest, xcodebuild, swift build/test, check.sh, pnpm/npm build/test, vitest, playwright, cargo build/test, docker build, make | M |
 | AGENT-5 | PreToolUse `"*"` hook: pending notice for session (stop, walltime, "slot ready (ticket X, held until HH:MM)") → deny once with notice text | M |
@@ -205,12 +205,11 @@ Hook mode: heavy unwrapped Bash → `permissionDecision: deny` with the `cgate r
 
 | Field | Type |
 |---|---|
-| enabled | Bool |
 | slots | Int (default 2) |
-| off_mode | none / noMore / soft / hard (off ⇒ effective slots 0) |
+| level | GateLevel (on/noMore/softStop/hardStop); not on ⇒ effective slots 0 |
 | leases | [Lease] |
 | tickets | FIFO [{id, session_id, issued_at}] (position/eta derived) |
-| held_slot | {ticket_id, until (now + 2 min)}? |
+| held | [{ticket_id, until}] (one hold per free slot) |
 | pending_notices | [session_id: text] |
 | settings | patterns[], default_max (15 m), hard_cap (60 m) |
 
@@ -231,10 +230,11 @@ Persisted: settings + level/slots in `gate.json` (GateStore). Leases in memory; 
 
 | Flow | Steps |
 |---|---|
-| Heavy command | Hook reads stdin → pattern match → not already `cgate` → deny with `cgate run --max <est> -- '<cmd>'` suggestion → agent re-issues wrapped (background). Fans always revert to Auto on app quit/crash/disconnect/10 s no heartbeat
+| Heavy command | Hook reads stdin → pattern match → not already `cgate` → deny with `cgate run --max <est> -- '<cmd>'` suggestion → agent re-issues wrapped (background). |
+| Fan safety | Fans always revert to Auto on app quit/crash/disconnect/10 s no heartbeat |
 | Run granted | cgate `acquire` → granted → spawn child in new pgid → heartbeat 2 s → exit → `release` → exit with child code |
 | Run busy | `acquire` → busy → ticket issued → print ticket, position, ETA, `cgate wait` hint → exit 75 |
-| Ticket due | Slot frees → reserved 2 min for oldest ticket → `cgate wait` exits 0 (background task completes → agent re-invoked) + "slot ready" notice for `"*"` hook → agent `cgate run --ticket <id>`; unclaimed → expire, next ticket |
+| Ticket due | Slot frees → each free slot is held 2 min for the next queued ticket → `cgate wait` exits 0 (background task completes → agent re-invoked) + "slot ready" notice for `"*"` hook → agent `cgate run --ticket <id>`; unclaimed → expire, next ticket |
 | Walltime | At max → notice to job's session ("exceeded max runtime, stop it") → +60 s → SIGTERM pg, +5 s SIGKILL → exit 77 |
 | Gate off: No more | slots := 0; running continue; new `acquire` → off (76) |
 | Gate off: Soft | No more + stop notice queued per session with running jobs; no signals |

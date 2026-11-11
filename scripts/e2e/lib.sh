@@ -53,7 +53,7 @@ finish() {
   echo "== $PASS passed, $FAIL failed (logs: $E2E_TMP)"
   [[ $FAIL -eq 0 ]]
 }
-trap 'stop_host' EXIT
+trap 'stop_host; kill $(jobs -p) 2>/dev/null' EXIT
 
 build() {
   [[ "${E2E_SKIP_BUILD:-}" == 1 ]] && return
