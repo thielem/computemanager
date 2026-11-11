@@ -43,9 +43,9 @@ final class Daemon: @unchecked Sendable {  // fields set once in run() on the ma
         for sig in [SIGTERM, SIGINT, SIGHUP] {
             signal(sig, SIG_IGN)
             let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            src.setEventHandler { [weak self] in
+            src.setEventHandler { // strong self: daemon lives until exit; a nil self must never skip the revert
                 Log.line("signal \(sig): reverting to auto and exiting")
-                self?.service?.stop()  // no more requests, then revert (controller ignores late ones)
+                self.service?.stop()  // no more requests, then revert (controller ignores late ones)
                 controller.shutdown()
                 exit(0)
             }
