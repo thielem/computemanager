@@ -8,7 +8,7 @@ the calling Claude session are not touched (parent `CLAUDE_*` vars are stripped;
 | Script | What |
 |---|---|
 | `cli.sh` | A: busy/ticket/wait/claim, hook fixtures, walltime (77), hard stop (78, pgid empty), soft stop, noMore (76), per-job kill, host down (fail open + fallback log). ~1.5 min; `E2E_SLOW=1` adds ticket expiry (+2 min) |
-| `claude.sh` | B: real `claude -p` (sonnet, ≤6 turns) with `--plugin-dir plugin/compute-gate`, `--setting-sources project`: B1 hook deny → `cgate run` → lease with session id; B2 noMore → "Compute gate off"; B3 pending stop notice → first tool call denied. `E2E_ONLY="B1"` to pick |
+| `claude.sh` | B: real `claude -p` (sonnet, ≤6 turns) with `--plugin-dir` (temp copy of plugin/compute-gate whose hook calls the debug `cgate`), `--setting-sources project`: B1 hook deny → `cgate run` → lease with session id; B2 noMore → "Compute gate off"; B3 pending stop notice → first tool call denied. `E2E_ONLY="B1"` to pick |
 
 `E2E_SKIP_BUILD=1` skips the (locked) debug build. Logs (gatehost requests + status changes,
 stream-json transcripts) stay in the temp dir printed at the end.

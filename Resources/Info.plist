@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>com.computemanager.app</string>
+	<string>com.moritzthiele.cgate</string>
 	<key>CFBundleName</key>
 	<string>Compute Manager</string>
 	<key>CFBundleDisplayName</key>

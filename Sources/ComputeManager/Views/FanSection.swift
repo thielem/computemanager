@@ -7,7 +7,7 @@ struct FanSection: View {
     static let installCommand: String = {
         guard let repo = Bundle.main.object(forInfoDictionaryKey: "CMRepoPath") as? String, !repo.isEmpty
         else { return "sudo scripts/install.sh" }
-        return "sudo \(repo)/scripts/install.sh"
+        return "sudo '\(repo)/scripts/install.sh'"
     }()
 
     var body: some View {

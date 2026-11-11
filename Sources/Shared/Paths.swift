@@ -52,7 +52,7 @@ public enum ClaudeMessaging {
 
 /// Identifiers used by packaging and the plugin.
 public enum Identifiers {
-    public static let appBundleID = "com.computemanager.app"
-    public static let fandLabel = "com.computemanager.fand"
+    public static let appBundleID = "com.moritzthiele.cgate"
+    public static let fandLabel = "com.moritzthiele.cgate.fand"
     public static let pluginName = "compute-gate"
 }

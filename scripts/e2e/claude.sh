@@ -16,9 +16,15 @@ chmod +x "$PROJ/scripts/check.sh"
 
 # Claude itself keeps the real HOME (auth); only parent-session vars are stripped. User
 # settings/hooks are not loaded (--setting-sources project), so only this plugin's hook runs.
+# The plugin's hooks.json calls the installed ~/.local/bin/cgate; run a copy that uses the debug build.
 cc() {  # cc <session-id> <out.jsonl> <prompt>
+  local PD="$E2E_TMP/plugin"
+  if [[ ! -d "$PD" ]]; then
+    cp -R "$WT/plugin/compute-gate" "$PD"
+    sed -i '' 's#\\"\$HOME/.local/bin/cgate\\"#'"$BIN"'/cgate#' "$PD/hooks/hooks.json"
+  fi
   (cd "$PROJ" && env "${STRIP[@]}" COMPUTEMANAGER_GATE_SOCK="$SOCK" PATH="$BIN:$PATH" \
-    claude -p "$3" --plugin-dir "$WT/plugin/compute-gate" --setting-sources project \
+    claude -p "$3" --plugin-dir "$PD" --setting-sources project \
       --model sonnet --max-turns 6 --session-id "$1" --no-session-persistence \
       --output-format stream-json --verbose \
       --allowedTools "Bash(cgate:*)" "Bash(scripts/check.sh)" "Bash(./scripts/check.sh)" \
