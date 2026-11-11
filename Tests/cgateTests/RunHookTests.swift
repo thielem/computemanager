@@ -82,14 +82,49 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
     }
 
     @Test func busyAndOffExitCodes() async throws {
-        let h = try Harness(slots: 0)
+        let h = try Harness(slots: 1)
         let ctx = h.ctx()
+        _ = await h.svc.handle(.acquire(AcquireRequest(sessionId: "x", cwd: "/x", command: "make", pid: 1)))
         #expect(await offPool { Runner.run(opts(["true"]), ctx) } == CgateExit.busy)
         #expect(h.stderr.all.last?.hasPrefix("compute busy: ticket t1, position 1") == true)
         #expect(await offPool { Runner.run(opts(["true"], ticket: "t9"), ctx) } == CgateExit.ticketExpired)
         _ = await h.svc.handle(.setGate(SetGateRequest(level: .noMore)))
         #expect(await offPool { Runner.run(opts(["true"]), ctx) } == CgateExit.gateOff)
         #expect(h.stderr.all.last == CgateMessage.gateOff)
+        _ = await h.svc.handle(.setGate(SetGateRequest(level: .on, slots: 0)))
+        #expect(await offPool { Runner.run(opts(["true"]), ctx) } == CgateExit.gateOff)
+        #expect(h.stderr.all.last == CgateMessage.noSlots)
+    }
+
+    @Test func waitersGiveUpOnZeroSlots() async throws {
+        let h = try Harness()
+        let ctx = h.ctx()
+        let link = h.link, lines = h.stderr
+        _ = await h.svc.handle(.acquire(AcquireRequest(sessionId: "x", cwd: "/x", command: "make", pid: 1)))
+        #expect(await offPool { Runner.run(opts(["true"]), ctx) } == CgateExit.busy)
+        var o = opts(["true"])
+        o.session = "other"
+        o.wait = true
+        let o2 = o
+        async let second = offPool { Runner.run(o2, ctx) }
+        #expect(await eventually { await h.status().tickets.count == 2 })
+        _ = await h.svc.handle(.setGate(SetGateRequest(level: .on, slots: 0)))
+        #expect(await offPool { Waiter.run(ticket: "t1", link: link, stderr: { lines.add($0) }) } == CgateExit.gateOff)
+        #expect(lines.all.last == CgateMessage.noSlots)
+        #expect(await second == CgateExit.gateOff)
+        #expect(await h.status().tickets.map(\.id) == ["t1"])  // --wait cancelled t2
+    }
+
+    @Test func abandonedWaitCancelsTicketOnce() async throws {
+        let h = try Harness()
+        _ = await h.svc.handle(.acquire(AcquireRequest(sessionId: "x", cwd: "/x", command: "make", pid: 1)))
+        _ = await h.svc.handle(.acquire(AcquireRequest(sessionId: "y", cwd: "/x", command: "make", pid: 1)))
+        #expect(await h.status().tickets.count == 1)
+        let w = WaitingTicket(link: h.link)
+        w.set("t1")
+        #expect(await offPool { w.cancel() })
+        #expect(await offPool { !w.cancel() })
+        #expect(await h.status().tickets.isEmpty)
     }
 
     @Test func hardStopKillsProcessGroup() async throws {
@@ -102,7 +137,7 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         _ = await h.svc.handle(.setGate(SetGateRequest(level: .hardStop)))
         #expect(await code == CgateExit.stoppedByUser)
         #expect(h.stderr.all.last == CgateMessage.stoppedByUser)
-        #expect(kill(-pgid, 0) == -1 && errno == ESRCH)
+        #expect(await eventually(2) { kill(-pgid, 0) == -1 && errno == ESRCH })
         #expect(await h.status().leases.isEmpty)
     }
 
@@ -199,6 +234,7 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         #expect(await eventually { await h.status().tickets.count == 1 })
         _ = await h.svc.handle(.setGate(SetGateRequest(level: .noMore)))
         #expect(await second == CgateExit.gateOff)
+        #expect(await h.status().tickets.isEmpty)  // abandoned ticket cancelled
         #expect(await first == 0)
     }
 

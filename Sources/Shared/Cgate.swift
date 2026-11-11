@@ -38,6 +38,10 @@ public enum CgateMessage {
     /// Exit 76; also the `off` text in `acquire`; `cgate run` reports it.
     public static let gateOff = "Compute gate off — continue without heavy runs or stop and report"
 
+    /// Exit 76 when the gate is on with 0 slots.
+    public static let noSlots =
+        "Compute gate: no slots configured — gate closed for new jobs. Continue without heavy runs or stop and report"
+
     /// Exit 75; also printed by `cgate run` when busy.
     public static func busy(_ t: TicketInfo) -> String {
         "compute busy: ticket \(t.id), position \(t.position), next slot \(latest(t.eta)), "

@@ -21,6 +21,9 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         let r = Request(id: "1", GateRequest.setGate(SetGateRequest(level: .noMore, slots: 0)))
         #expect(try json(r) == #"{"body":{"level":"noMore","slots":0},"id":"1","op":"setGate","v":1}"#)
         #expect(try json(Request(id: "2", GateRequest.status)) == #"{"id":"2","op":"status","v":1}"#)
+        let c = Request(id: "3", GateRequest.cancelTicket(CancelTicketRequest(ticket: "t1")))
+        #expect(try json(c) == #"{"body":{"ticket":"t1"},"id":"3","op":"cancelTicket","v":1}"#)
+        #expect(try roundTrip(c).message == c.message)
     }
 
     @Test func responseWireShape() throws {

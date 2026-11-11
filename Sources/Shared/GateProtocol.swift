@@ -153,6 +153,13 @@ public struct WaitTicketRequest: Codable, Sendable, Equatable {
     public init(ticket: String) { self.ticket = ticket }
 }
 
+/// `cancelTicket`: a `cgate run --wait` gave up waiting; its ticket is dropped. Reply: empty.
+/// An older app answers `unknownOp` (the ticket then expires on its own).
+public struct CancelTicketRequest: Codable, Sendable, Equatable {
+    public var ticket: String
+    public init(ticket: String) { self.ticket = ticket }
+}
+
 public struct SetGateRequest: Codable, Sendable, Equatable {
     public var level: GateLevel
     /// New configured slot count; nil keeps current.
@@ -185,6 +192,7 @@ public enum GateRequest: OpMessage {
     case meeting
     case killJob(KillJobRequest)
     case setSettings(GateSettings)
+    case cancelTicket(CancelTicketRequest)
 
     public static var version: Int { ProtocolVersion.gate }
 
@@ -200,12 +208,14 @@ public enum GateRequest: OpMessage {
         case .meeting: "meeting"
         case .killJob: "killJob"
         case .setSettings: "setSettings"
+        case .cancelTicket: "cancelTicket"
         }
     }
 
     public func encodeBody(into c: inout KeyedEncodingContainer<EnvelopeKey>) throws {
         switch self {
         case .acquire(let b): try c.encode(b, forKey: .body)
+        case .cancelTicket(let b): try c.encode(b, forKey: .body)
         case .killJob(let b): try c.encode(b, forKey: .body)
         case .setSettings(let b): try c.encode(b, forKey: .body)
         case .release(let b): try c.encode(b, forKey: .body)
@@ -229,6 +239,7 @@ public enum GateRequest: OpMessage {
         case "meeting": self = .meeting
         case "killJob": self = .killJob(try c.body(KillJobRequest.self))
         case "setSettings": self = .setSettings(try c.body(GateSettings.self))
+        case "cancelTicket": self = .cancelTicket(try c.body(CancelTicketRequest.self))
         default: throw WireError(.unknownOp, op)
         }
     }
@@ -413,6 +424,7 @@ public enum GateReply: OpMessage {
     case meeting(GateStatus)
     case killJob(GateStatus)
     case setSettings(GateStatus)
+    case cancelTicket
 
     public static var version: Int { ProtocolVersion.gate }
 
@@ -428,13 +440,14 @@ public enum GateReply: OpMessage {
         case .meeting: "meeting"
         case .killJob: "killJob"
         case .setSettings: "setSettings"
+        case .cancelTicket: "cancelTicket"
         }
     }
 
     public func encodeBody(into c: inout KeyedEncodingContainer<EnvelopeKey>) throws {
         switch self {
         case .acquire(let b): try c.encode(b, forKey: .body)
-        case .release: break
+        case .release, .cancelTicket: break
         case .heartbeat(let b): try c.encode(b, forKey: .body)
         case .hookCheck(let b): try c.encode(b, forKey: .body)
         case .waitTicket(let b): try c.encode(b, forKey: .body)
@@ -455,6 +468,7 @@ public enum GateReply: OpMessage {
         case "meeting": self = .meeting(try c.body(GateStatus.self))
         case "killJob": self = .killJob(try c.body(GateStatus.self))
         case "setSettings": self = .setSettings(try c.body(GateStatus.self))
+        case "cancelTicket": self = .cancelTicket
         default: throw WireError(.unknownOp, op)
         }
     }

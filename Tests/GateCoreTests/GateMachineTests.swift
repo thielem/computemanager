@@ -109,7 +109,8 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
 
 @Suite struct TicketTests {
     @Test func sameSessionCwdReusesTicketUnknownDoesNot() {
-        let m = machine(slots: 0)
+        let m = machine(slots: 1)
+        _ = m.acquire(req("x"), now: t0)
         #expect(busy(m.acquire(req("s"), now: t0))?.id == "t1")
         #expect(busy(m.acquire(req("s"), now: t0))?.id == "t1")
         #expect(busy(m.acquire(req("s", cwd: "/other"), now: t0))?.id == "t2")
@@ -207,10 +208,40 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
         #expect(m.ticketInfo("t1", now: t0 + 400)?.eta == t0 + 300)
     }
 
-    @Test func etaUnknownWithoutLeases() {
+    @Test func zeroSlotsClosesGate() throws {
         let m = machine(slots: 0)
-        #expect(busy(m.acquire(req("a"), now: t0))?.eta == nil)
-        #expect(m.nextSlotETA(t0) == nil)
+        #expect(m.acquire(req("a"), now: t0) == .off(message: CgateMessage.noSlots))
+        #expect(m.tickets.isEmpty && m.nextSlotETA(t0) == nil)
+        // Slots set to 0 while a ticket waits: no ETA, no hold, claims answer off.
+        let n = machine(slots: 1)
+        _ = try #require(granted(n.acquire(req("a"), now: t0)))
+        #expect(busy(n.acquire(req("b"), now: t0))?.eta != nil)
+        n.m.setGate(.on, slots: 0, now: t0)
+        #expect(n.ticketInfo("t1", now: t0)?.eta == nil && n.nextSlotETA(t0) == nil && n.held.isEmpty)
+        #expect(n.acquire(req("b", ticket: "t1"), now: t0) == .off(message: CgateMessage.noSlots))
+    }
+
+    @Test func cancelTicketFreesHeldSlot() throws {
+        let m = machine(slots: 1)
+        let a = try #require(granted(m.acquire(req("a"), now: t0)))
+        _ = m.acquire(req("b"), now: t0)
+        _ = m.acquire(req("c"), now: t0)
+        m.m.cancelTicket("t1", now: t0)
+        m.release(a, now: t0)
+        #expect(m.tickets.map(\.id) == ["t2"] && m.held.first?.ticketId == "t2")
+    }
+
+    @Test func endedLeaseDropsItsUndeliveredNotices() throws {
+        let m = machine(slots: 2)
+        let a = try #require(granted(m.acquire(req("s", max: 3600), now: t0)))
+        _ = try #require(granted(m.acquire(req("s", cwd: "/p/b", max: 60, pid: 7), now: t0)))
+        #expect(m.killJob(a, soft: true, now: t0))
+        m.advance(now: t0 + 61)  // b hits walltime
+        #expect(m.notices.count == 2)
+        m.release(a, now: t0 + 61)
+        #expect(m.notices.count == 1)
+        m.reap(dead: [7], now: t0 + 62)
+        #expect(m.notices.isEmpty)
     }
 
     @Test func slotReadyNoticeOnlyWithoutWaiter() throws {
@@ -494,6 +525,13 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
 }
 
 @Suite struct MatcherTests {
+    @Test func cgateRunCommandTexts() {
+        #expect(CommandMatcher.cgateRunCommands("cd x && cgate run --wait -- 'swift test' > /tmp/l 2>&1") == ["swift test"])
+        #expect(CommandMatcher.cgateRunCommands("cgate run -- make all >log") == ["make all"])
+        #expect(CommandMatcher.cgateRunCommands("cgate status; cgate wait --ticket t1; ls") == [])
+        #expect(CommandMatcher.cgateRunCommands("echo 'cgate run -- x'") == [])
+    }
+
     let p = Defaults.autoWrapPatterns
 
     @Test func matching() {
@@ -570,9 +608,46 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
         _ = m.hookCheck(run("cgate run -- swift build", agent: "B"), now: t0)
         _ = m.acquire(acq("swift build"), now: t0 + 16)  // expired
         #expect(m.leases.last?.agentId == nil)
-        _ = m.hookCheck(run("cgate run -- ls", agent: nil), now: t0 + 20)  // main session: nothing stashed
         _ = m.hookCheck(run("cgate wait --ticket t1", agent: "C"), now: t0 + 20)  // only `run` attributes
         #expect(m.pendingAgents.isEmpty)
+        _ = m.hookCheck(run("cgate run -- ls", agent: nil), now: t0 + 20)  // main session: stashed as nil
+        #expect(m.pendingAgents.map(\.agentId) == [nil])
+    }
+
+    /// Hook line → the exact command text cgate sends; one entry per invocation.
+    @Test func exactCommandTextAttribution() throws {
+        let big = String(repeating: "x", count: 5000)
+        let cases: [(hook: String, acquired: [String])] = [
+            (#"cgate run --max 5m -- pytest -k "a or b""#, ["pytest -k 'a or b'"]),
+            (#"cgate run -- 'echo "it'\''s"'"#, [#"echo "it's""#]),
+            (#"cgate run -- 'a'\''b' c"#, [#"'a'\''b' c"#]),
+            ("cgate run -- 'echo \(big)'", [CommandText.capped("echo \(big)")]),
+            ("cgate run -- a; cgate run -- b", ["a", "b"]),
+            ("bash -c 'cgate run -- make test 2>&1' > /tmp/log", ["make test"]),
+        ]
+        for c in cases {
+            let m = machine(slots: 4)
+            _ = m.hookCheck(run(c.hook, agent: "A"), now: t0)
+            for cmd in c.acquired { _ = m.acquire(acq(cmd), now: t0 + 1) }
+            #expect(m.leases.map(\.agentId) == c.acquired.map { _ in "A" }, "\(c.hook)")
+            #expect(m.pendingAgents.isEmpty, "\(c.hook)")
+        }
+    }
+
+    @Test func mainSessionDoesNotTakeSubagentEntry() throws {
+        for order in [false, true] {
+            let m = machine(slots: 4)
+            _ = m.hookCheck(run("cgate run -- make test", agent: "A"), now: t0)
+            _ = m.hookCheck(run("cgate run -- make", agent: nil), now: t0)
+            if order {
+                _ = m.acquire(acq("make test"), now: t0 + 1)
+                _ = m.acquire(acq("make"), now: t0 + 1)
+            } else {
+                _ = m.acquire(acq("make"), now: t0 + 1)
+                _ = m.acquire(acq("make test"), now: t0 + 1)
+            }
+            #expect(m.leases.map(\.agentId) == (order ? ["A", nil] : [nil, "A"]))
+        }
     }
 
     @Test func twoSubagentsSameSession() throws {

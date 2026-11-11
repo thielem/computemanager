@@ -104,6 +104,9 @@ public final class GateService: @unchecked Sendable {  // all mutable state guar
             let s: GateStatus? = mutate { m, now in m.killJob(r.jobId, soft: r.soft == true, now: now) ? m.snapshot(now: now) : nil }
             guard let s else { return .failure(WireError(.invalidState, "unknown job \(r.jobId)")) }
             return .success(.killJob(s))
+        case .cancelTicket(let r):
+            mutate { $0.cancelTicket(r.ticket, now: $1) }
+            return .success(.cancelTicket)
         case .setSettings(let g):
             return .success(.setSettings(mutate { m, now in
                 m.setSettings(g, now: now)

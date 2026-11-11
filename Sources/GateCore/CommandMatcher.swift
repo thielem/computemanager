@@ -1,4 +1,5 @@
 import Foundation
+import Shared
 
 /// Heavy-command matching for the hook (AGENT-3, AGENT-4).
 ///
@@ -51,6 +52,38 @@ enum CommandMatcher {
         segments(command).contains { seg in
             layers(seg).contains { $0.count > 1 && basename($0[0]) == "cgate" && $0[1] == sub }
         }
+    }
+
+    /// The command text of every `cgate run … -- <cmd…>` in the line (any segment, prefixes and
+    /// `bash -c` stripped), rebuilt exactly as `cgate run` sends it in `acquire`: one word → as is,
+    /// several → `shellQuote`-joined; capped like `AcquireRequest.command`. Redirection words
+    /// (`>x`, `2>&1`, `> x`) are dropped: the shell consumes them, cgate never sees them.
+    static func cgateRunCommands(_ command: String, depth: Int = 0) -> [String] {
+        segments(command).flatMap { seg -> [String] in
+            for layer in layers(seg) {
+                if depth < 3, let line = shellDashC(layer) { return cgateRunCommands(line, depth: depth + 1) }
+                guard layer.count > 1, basename(layer[0]) == "cgate", layer[1] == "run",
+                      let dd = layer.firstIndex(of: "--") else { continue }
+                let words = dropRedirections(layer[(dd + 1)...])
+                guard !words.isEmpty else { return [] }
+                return [CommandText.capped(words.count == 1 ? words[0] : words.map(shellQuote).joined(separator: " "))]
+            }
+            return []
+        }
+    }
+
+    private static func dropRedirections(_ w: ArraySlice<String>) -> [String] {
+        var out: [String] = []
+        var skipNext = false
+        for x in w {
+            if skipNext { skipNext = false; continue }
+            if let r = x.range(of: #"^[0-9]*(>>|>&|<&|&>>|&>|>|<)"#, options: .regularExpression) {
+                if r.upperBound == x.endIndex { skipNext = true }  // `> file`: target is the next word
+                continue
+            }
+            out.append(x)
+        }
+        return out
     }
 
     /// True if `ticket` appears as a whole word (or `--ticket=<id>`) in a cgate segment.

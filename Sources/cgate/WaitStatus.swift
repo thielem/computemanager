@@ -2,7 +2,8 @@ import Foundation
 import Shared
 
 /// `cgate wait --ticket <id>` (AGENT-1a): long-poll until the ticket's slot is held (exit 0)
-/// or the ticket expired (exit 79). App unreachable → exit 0 (fail open: run ungated).
+/// or the ticket expired (exit 79). Gate on with 0 slots → exit 76 (nothing will ever free up).
+/// App unreachable → exit 0 (fail open: run ungated).
 enum Waiter {
     static func run(ticket: String, link: GateLink, stderr: (String) -> Void,
                     pollTimeout: TimeInterval = Defaults.waitTicketPollWindow + 5) -> Int32 {
@@ -15,7 +16,10 @@ enum Waiter {
                 stderr(CgateMessage.ticketExpired(t))
                 return CgateExit.ticketExpired
             case .waitTicket(.pending)?:
-                continue
+                if case .status(let s)? = try? link.call(.status), s.level == .on, s.effectiveSlots == 0 {
+                    stderr(CgateMessage.noSlots)
+                    return CgateExit.gateOff
+                }
             default:
                 stderr("compute gate not running: run your command directly (cgate run works ungated)")
                 return CgateExit.ok

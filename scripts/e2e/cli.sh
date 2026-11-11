@@ -14,7 +14,7 @@ sleep 1
 iso cgate run --session e2e-b --max 1m -- 'echo b' >"$T/b.out" 2>"$T/b.err"; rc=$?
 check "busy exit 75 (got $rc)" test $rc -eq 75
 check "busy message has ticket, position, ETA, wait hint: $(cat "$T/b.err")" \
-  has "$T/b.err" '^compute busy: ticket [^,]+, position 1, next slot ~[0-9]{2}:[0-9]{2}\. Run in background: cgate wait --ticket'
+  has "$T/b.err" '^compute busy: ticket [^,]+, position 1, next slot by ~[0-9]{2}:[0-9]{2} \(latest\), then held for you .*Start `cgate wait --ticket'
 TICKET=$(sed -nE 's/^compute busy: ticket ([^,]+),.*/\1/p' "$T/b.err")
 start=$(date +%s)
 iso cgate wait --ticket "$TICKET" >"$T/w.out" 2>"$T/w.err"; rc=$?
@@ -41,7 +41,7 @@ echo "-- walltime: notice at max, kill after 60 s grace (exit 77)"
 iso cgate run --session e2e-w --max 2s -- 'sleep 300' >"$T/wt.out" 2>"$T/wt.err" &
 W=$!
 sleep 5
-check "walltime notice printed by cgate: $(head -1 "$T/wt.err")" has "$T/wt.err" 'max runtime (2s) of'
+check "walltime notice printed by cgate: $(head -1 "$T/wt.err")" has "$T/wt.err" 'max runtime \(2s\) of'
 out=$(hook '{"session_id":"e2e-w","cwd":"/tmp","tool_name":"Read","tool_input":{}}')
 check "walltime notice via hook → deny: ${out:0:140}" grep -q 'max runtime (2s) of' <<<"$out"
 check "notice delivered only once" test -z "$(hook '{"session_id":"e2e-w","cwd":"/tmp","tool_name":"Read","tool_input":{}}')"

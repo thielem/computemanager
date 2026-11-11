@@ -43,11 +43,31 @@ enum Runner {
                                  messagingSocket: ctx.env[ClaudeMessaging.socketEnv],
                                  label: GitLabel.compute(cwd: ctx.cwd))
 
+        // Signal handlers before acquire/spawn (L3); the forwarder kills once the pid is known.
+        // While `--wait` waits, a signal cancels the ticket and exits 128 + signal.
+        let fwd = Forwarder(grace: ctx.killGrace)
+        let waiting = WaitingTicket(link: ctx.link)
+        var signalSources: [DispatchSourceSignal] = []
+        if ctx.forwardSignals {
+            for sig in [SIGINT, SIGTERM, SIGHUP] {
+                signal(sig, SIG_IGN)
+                let s = DispatchSource.makeSignalSource(signal: sig, queue: .global())
+                s.setEventHandler {
+                    if waiting.cancel() { exit(128 + sig) }
+                    fwd.forward(sig)
+                }
+                s.resume()
+                signalSources.append(s)
+            }
+        }
+        defer { signalSources.forEach { $0.cancel() } }
+
         var job: (id: UUID, max: TimeInterval, startedAt: Date)?
         var announced = false
         acquiring: while true {
             switch try? ctx.link.call(.acquire(acq)) {
             case .acquire(.granted(let id, let max))?:
+                waiting.set(nil)
                 job = (id, max, Date())
             case .acquire(.busy(let t))?:
                 guard o.wait else {
@@ -57,35 +77,27 @@ enum Runner {
                 if !announced { ctx.stderr(CgateMessage.busyWaiting(t)) }
                 announced = true
                 acq.ticket = t.id
+                waiting.set(t.id)
                 switch waitForSlot(t.id, ctx) {
                 case .ready: continue acquiring
-                case .exit(let code): return code
+                case .exit(let code):
+                    waiting.cancel()
+                    return code
                 }
             case .acquire(.off(let m))?:
+                waiting.cancel()
                 ctx.stderr(m)
                 return CgateExit.gateOff
             case .acquire(.ticketExpired(let t))?:
+                waiting.set(nil)
                 ctx.stderr(CgateMessage.ticketExpired(t))
                 return CgateExit.ticketExpired
             default:
+                waiting.cancel()
                 logUngated(ctx, session: session, command: text)
             }
             break
         }
-
-        // Signal handlers before spawn (L3); the forwarder kills once the pid is known.
-        let fwd = Forwarder(grace: ctx.killGrace)
-        var signalSources: [DispatchSourceSignal] = []
-        if ctx.forwardSignals {
-            for sig in [SIGINT, SIGTERM, SIGHUP] {
-                signal(sig, SIG_IGN)
-                let s = DispatchSource.makeSignalSource(signal: sig, queue: .global())
-                s.setEventHandler { fwd.forward(sig) }
-                s.resume()
-                signalSources.append(s)
-            }
-        }
-        defer { signalSources.forEach { $0.cancel() } }
 
         guard let pid = spawn(argv, env: ctx.env) else {
             ctx.stderr("cgate: cannot run \(argv[0])")
@@ -264,17 +276,36 @@ final class Forwarder: @unchecked Sendable {  // guarded by lock
     }
 }
 
+/// The ticket a `run --wait` is waiting on; `cancel` tells the gate it was abandoned (once).
+final class WaitingTicket: @unchecked Sendable {  // guarded by lock
+    private let lock = NSLock()
+    private let link: GateLink
+    private var ticket: String?
+
+    init(link: GateLink) { self.link = link }
+
+    func set(_ t: String?) { lock.withLock { ticket = t } }
+
+    /// True if a ticket was being waited on (and is now cancelled).
+    @discardableResult
+    func cancel() -> Bool {
+        guard let t = lock.withLock({ () -> String? in defer { ticket = nil }; return ticket }) else { return false }
+        _ = try? link.call(.cancelTicket(CancelTicketRequest(ticket: t)), timeout: 2)
+        return true
+    }
+}
+
 private enum WaitOutcome { case ready, exit(Int32) }
 
 /// `run --wait`: long-poll the ticket. Ready (or app gone: the next acquire decides) → claim;
-/// expired → 79; gate turned off while waiting → 76.
+/// expired → 79; gate turned off (or 0 slots) while waiting → 76.
 private func waitForSlot(_ ticket: String, _ ctx: RunContext) -> WaitOutcome {
     while true {
         switch try? ctx.link.call(.waitTicket(WaitTicketRequest(ticket: ticket)),
                                   timeout: Defaults.waitTicketPollWindow + 5) {
         case .waitTicket(.pending)?:
-            if case .status(let s)? = try? ctx.link.call(.status), s.level.isOff {
-                ctx.stderr(CgateMessage.gateOff)
+            if case .status(let s)? = try? ctx.link.call(.status), s.effectiveSlots == 0 {
+                ctx.stderr(s.level.isOff ? CgateMessage.gateOff : CgateMessage.noSlots)
                 return .exit(CgateExit.gateOff)
             }
         case .waitTicket(.expired(let t))?:
