@@ -3,15 +3,9 @@
 ## State
 M1 (fand, menu bar app, GateCore/cgate/plugin) is built, reviewed, e2e-tested and merged into `main` at 5e0ca99; `scripts/check.sh` is green there. Nothing installed or pushed; ~/.claude untouched.
 
-## Open
-Branch `main--int-fix2` has unverified WIP for 5 round-2 integration findings:
-1. `scripts/e2e/claude.sh` should use a copied plugin with hooks.json pointing to debug `$BIN/cgate`.
-2. PLAN.md gate-state table: `level`, `held: [{ticket_id, until}]`, one 2-min hold per free slot.
-3. PLAN.md row formatting; fans-revert sentence in its own row/Safety.
-4. Quote paths with spaces in `scripts/bundle.sh` PlistBuddy and the FanSection install hint.
-5. `scripts/e2e/lib.sh` trap also kills background jobs.
-
-Next: verify each, run `scripts/check.sh` + `bash scripts/e2e/cli.sh`, then merge --no-ff into main (user pre-approved merges into main).
+## Done (int-fix2, merged)
+Round-2 integration fixes verified and merged: e2e claude.sh uses a plugin copy with debug cgate, PLAN.md gate-state/rows fixed, quoted paths in bundle.sh/FanSection, e2e trap kills jobs.
+Identifiers are now `com.moritzthiele.cgate` (app bundle) and `com.moritzthiele.cgate.fand` (LaunchDaemon label/plist).
 
 ## User's next steps (TODO.md order)
 1. `sudo scripts/install.sh`

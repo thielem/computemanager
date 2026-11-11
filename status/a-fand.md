@@ -6,7 +6,7 @@
 - `FanController` state machine: auto / performance / max; curve 55→85 °C with 3 °C dead-band hysteresis; thermalState ≥ serious → Mx; no plausible P-core sensor → Mx. Safety: Auto at start, SIGTERM/SIGINT/SIGHUP, control-connection disconnect, watchdog (10 s, checked per 2 s tick → revert within ≤ 12 s), wake re-apply (IORegisterForSystemPower) + per-tick re-assert if SMC dropped manual.
 - `FandService`: FanServer at `Paths.fandSocket` (0666 + peer-UID check: root or console user via SCDynamicStoreCopyConsoleUser), ops status / setMode / heartbeat / subscribe (immediate push, then every tick 2 s + on setMode/revert/wake).
 - CLI: `fand` (daemon), `fand --print-status` (read-only JSON, unprivileged), `fand --revert-auto` (root, one-shot), `fand --version`.
-- `scripts/install.sh`, `scripts/uninstall.sh`, `packaging/launchd/com.computemanager.fand.plist` (not run).
+- `scripts/install.sh`, `scripts/uninstall.sh`, `packaging/launchd/com.moritzthiele.cgate.fand.plist` (not run).
 - Review round 1 fixes: shutdown order + `stopped` flag, monotonic watchdog clock, per-controller watchdog, Auto before temp-key enumeration, install-dir ownership check.
 - Tests: `Tests/fandTests` (32 tests: codec, allowlist, discovery, clamp, curve/hysteresis, modes, watchdog, disconnect, wake, shutdown, socket E2E with fake SMC, peer auth). check.sh green.
 - Verified on hardware (read-only): `--print-status` → 2 fans 2317–6800, Ftst absent, Tp=54 Te=3 Tg=10, SMCParam 80 bytes.

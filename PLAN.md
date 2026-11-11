@@ -280,7 +280,7 @@ plugin/compute-gate/
   .claude-plugin/plugin.json
   hooks/hooks.json
   skills/compute-gate/SKILL.md
-packaging/launchd/   com.computemanager.fand.plist
+packaging/launchd/   com.moritzthiele.cgate.fand.plist
 scripts/
   check.sh  swiftw  build-lock.sh  bundle.sh
   install.sh  uninstall.sh  install-cgate.sh

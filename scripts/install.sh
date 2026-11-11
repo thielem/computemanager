@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-LABEL=com.computemanager.fand
+LABEL=com.moritzthiele.cgate.fand
 DEST_DIR=/usr/local/libexec/computemanager
 DEST_BIN=$DEST_DIR/fand
 PLIST_SRC=packaging/launchd/$LABEL.plist

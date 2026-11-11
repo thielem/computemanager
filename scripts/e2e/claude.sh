@@ -21,7 +21,7 @@ cc() {  # cc <session-id> <out.jsonl> <prompt>
   local PD="$E2E_TMP/plugin"
   if [[ ! -d "$PD" ]]; then
     cp -R "$WT/plugin/compute-gate" "$PD"
-    sed -i '' "s#\"\$HOME/.local/bin/cgate\" hook#\"$BIN/cgate\" hook#" "$PD/hooks/hooks.json"
+    sed -i '' 's#\\"\$HOME/.local/bin/cgate\\"#'"$BIN"'/cgate#' "$PD/hooks/hooks.json"
   fi
   (cd "$PROJ" && env "${STRIP[@]}" COMPUTEMANAGER_GATE_SOCK="$SOCK" PATH="$BIN:$PATH" \
     claude -p "$3" --plugin-dir "$PD" --setting-sources project \

@@ -4,7 +4,7 @@
 # Usage: sudo scripts/uninstall.sh
 set -euo pipefail
 
-LABEL=com.computemanager.fand
+LABEL=com.moritzthiele.cgate.fand
 DEST_DIR=/usr/local/libexec/computemanager
 DEST_BIN=$DEST_DIR/fand
 PLIST_DST=/Library/LaunchDaemons/$LABEL.plist

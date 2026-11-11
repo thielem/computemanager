@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.computemanager.fand</string>
+    <string>com.moritzthiele.cgate.fand</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/libexec/computemanager/fand</string>
