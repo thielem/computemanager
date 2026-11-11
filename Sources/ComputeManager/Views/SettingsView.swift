@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SettingsView: View {
     let gate: GateViewModel
+    let fan: FanViewModel
     @State private var patterns = ""
     @State private var loginEnabled = SMAppService.mainApp.status == .enabled
     @FocusState private var editing: Bool
@@ -24,6 +25,31 @@ struct SettingsView: View {
                 }
             }
 
+            Section {
+                Stepper(value: curveValue(\.lowTemp), in: FanCurve.lowTempRange) {
+                    LabeledContent("Start", value: "\(Int(fan.curve.lowTemp)) °C")
+                }
+                Stepper(value: curveValue(\.highTemp),
+                        in: (fan.curve.lowTemp + FanCurve.minSpan)...FanCurve.highTempMax) {
+                    LabeledContent("Full speed", value: "\(Int(fan.curve.highTemp)) °C")
+                }
+                Stepper(value: curveValue(\.hysteresis), in: FanCurve.hysteresisRange) {
+                    LabeledContent("Hysteresis", value: "\(Int(fan.curve.hysteresis)) °C")
+                }
+            } header: {
+                HStack {
+                    Text("Performance")
+                    Spacer()
+                    if fan.curveNotApplied {
+                        Text("Needs fand update").foregroundStyle(.secondary)
+                            .help("Run install.sh again to apply the curve")
+                    }
+                    Button("Reset") { fan.setCurve(Defaults.fanCurve) }
+                        .buttonStyle(.borderless)
+                        .disabled(fan.curve == Defaults.fanCurve)
+                }
+            }
+
             Section("Heavy commands") {
                 TextEditor(text: $patterns)
                     .font(.system(.body, design: .monospaced))
@@ -37,7 +63,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 380)
+        .frame(width: 400, height: 640)
         .onAppear { reloadPatterns() }
         .onDisappear { commitPatterns() }
         .onChange(of: settings.patterns) { if !editing { reloadPatterns() } }
@@ -53,6 +79,14 @@ struct SettingsView: View {
         s.patterns = Self.parse(patterns)
         guard s != settings else { return }
         Task { await gate.updateSettings(s) }
+    }
+
+    private func curveValue(_ key: WritableKeyPath<FanCurve, Double>) -> Binding<Double> {
+        Binding(get: { fan.curve[keyPath: key] }, set: { v in
+            var c = fan.curve
+            c[keyPath: key] = v
+            fan.setCurve(c)
+        })
     }
 
     private func minutes(_ key: WritableKeyPath<GateSettings, TimeInterval>) -> Binding<Int> {

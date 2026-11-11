@@ -68,7 +68,7 @@ final class Daemon: @unchecked Sendable {  // fields set once in run() on the ma
         Log.line("listening on \(path)")
 
         let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "fand.tick"))
-        t.schedule(deadline: .now() + controller.curve.tick, repeating: controller.curve.tick, leeway: .milliseconds(100))
+        t.schedule(deadline: .now() + controller.tick, repeating: controller.tick, leeway: .milliseconds(100))
         t.setEventHandler { controller.tick(now: Monotonic.now()) }
         t.resume()
         timer = t

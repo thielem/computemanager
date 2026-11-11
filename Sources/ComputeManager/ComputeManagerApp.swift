@@ -13,10 +13,6 @@ struct ComputeManagerApp: App {
             MenuBarLabel(model: model)
         }
         .menuBarExtraStyle(.window)
-
-        Settings {
-            SettingsView(gate: model.gate)
-        }
     }
 }
 

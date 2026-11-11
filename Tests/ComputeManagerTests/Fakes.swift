@@ -50,13 +50,19 @@ final class FakeFanLink: FanControlling, @unchecked Sendable {  // guarded by `l
     private let lock = NSLock()
     private var _onStatus: (@Sendable (FanStatus?) -> Void)?
     private(set) var modes: [FanMode] = []
+    private(set) var curves: [FanCurve?] = []
     var onStatus: (@Sendable (FanStatus?) -> Void)? {
         get { lock.withLock { _onStatus } }
         set { lock.withLock { _onStatus = newValue } }
     }
     func start() {}
-    func setMode(_ mode: FanMode) { lock.withLock { modes.append(mode) } }
-    func shutdown() { setMode(.auto) }
+    func setMode(_ mode: FanMode, curve: FanCurve?) {
+        lock.withLock {
+            modes.append(mode)
+            curves.append(curve)
+        }
+    }
+    func shutdown() { setMode(.auto, curve: nil) }
 }
 
 func lease(_ project: String = "proj") -> Lease {

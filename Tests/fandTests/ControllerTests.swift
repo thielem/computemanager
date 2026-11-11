@@ -75,6 +75,22 @@ private func allAllowed(_ smc: FakeSMC) -> Bool {
         #expect(allAllowed(smc))
     }
 
+    @Test func newCurveAppliedNowAndOnNextTick() {
+        let smc = FakeSMC(temps: ["Tp01": 70])
+        let c = make(smc)
+        c.setMode(.performance, connection: 1, now: t0)
+        #expect(smc.value("F0Tg") == 4559)  // default 55-85: halfway
+        let curve = FanCurve(lowTemp: 60, highTemp: 70, hysteresis: 0, tick: 2)
+        let s = c.setMode(.performance, curve: curve, connection: 1, now: t0 + 1)
+        #expect(s.curve == curve && c.curve == curve)
+        #expect(smc.value("F0Tg") == 6800)  // 70 = full speed now
+        smc.set("Tp01", 65)
+        c.tick(now: t0 + 2)
+        #expect(smc.value("F0Tg") == 4559 && smc.value("F1Tg") == 4559)
+        // nil keeps the curve.
+        #expect(c.setMode(.performance, connection: 1, now: t0 + 3).curve == curve)
+    }
+
     @Test func thermalSeriousForcesMax() {
         let smc = FakeSMC(temps: ["Tp01": 50])
         let th = ThermalBox()

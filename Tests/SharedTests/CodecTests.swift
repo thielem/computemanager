@@ -111,6 +111,26 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         }
         #expect(ThermalState.serious >= .serious && ThermalState.fair < .serious)
     }
+
+    @Test func setModeCurveIsOptionalAndRoundTrips() throws {
+        let old = #"{"v":\#(ProtocolVersion.fand),"id":"1","op":"setMode","body":{"mode":"max"}}"#
+        let r = try JSONDecoder().decode(FanRequestEnvelope.self, from: Data(old.utf8))
+        #expect(r.message == .setMode(SetModeRequest(mode: .max)))
+        let c = FanCurve(lowTemp: 50, highTemp: 80, hysteresis: 2, tick: 2)
+        let req = Request(id: "x", FanRequest.setMode(SetModeRequest(mode: .performance, curve: c)))
+        #expect(try roundTrip(req) == req)
+    }
+
+    @Test func curveClamping() {
+        let tick: TimeInterval = 2
+        let c = FanCurve(lowTemp: 20, highTemp: 120, hysteresis: 30, tick: 99).clamped(tick: tick)
+        #expect(c == FanCurve(lowTemp: 40, highTemp: 95, hysteresis: 10, tick: 2))
+        let c2 = FanCurve(lowTemp: 90, highTemp: 60, hysteresis: -1, tick: 2).clamped(tick: tick)
+        #expect(c2 == FanCurve(lowTemp: 80, highTemp: 85, hysteresis: 0, tick: 2))
+        #expect(Defaults.fanCurve.clamped(tick: tick) == Defaults.fanCurve)
+        #expect(FanCurve(lowTemp: .nan, highTemp: 80, hysteresis: 3, tick: 2).clamped(tick: tick) == nil)
+        #expect(FanCurve(lowTemp: 50, highTemp: .infinity, hysteresis: 3, tick: 2).clamped(tick: tick) == nil)
+    }
 }
 
 @Suite struct CgateContractTests {

@@ -162,6 +162,39 @@ import Testing
         #expect(fan.activity == nil)
     }
 
+    @Test func curveClampedPersistedAndSent() {
+        let link = FakeFanLink()
+        let saved = Locked<FanCurve?>(nil)
+        let fan = FanViewModel(link: link)
+        fan.onPersistCurve = { saved.set($0) }
+        fan.start()
+        #expect(link.curves == [Defaults.fanCurve])
+        fan.select(.performance)
+        fan.setCurve(FanCurve(lowTemp: 60, highTemp: 62, hysteresis: 3, tick: 9))
+        let want = FanCurve(lowTemp: 60, highTemp: 65, hysteresis: 3, tick: Defaults.fanCurve.tick)
+        #expect(fan.curve == want && saved.get() == want)
+        #expect(link.modes.last == .performance && link.curves.last == want)
+        let n = link.modes.count
+        fan.setCurve(want)  // unchanged: nothing sent
+        #expect(link.modes.count == n)
+        // Old fand keeps reporting the default curve.
+        fan.apply(FanStatus(mode: .performance, fans: [], temps: Temperatures(), thermalState: .nominal,
+                            lastHeartbeat: nil))
+        #expect(fan.curveNotApplied)
+        fan.setCurve(Defaults.fanCurve)
+        #expect(!fan.curveNotApplied)
+    }
+
+    @Test func fanStoreRoundTrip() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("cm-fan-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = FanStore(url: url)
+        #expect(store.load() == Defaults.fanCurve)
+        let c = FanCurve(lowTemp: 50, highTemp: 90, hysteresis: 1, tick: 2)
+        store.save(c)
+        #expect(store.load() == c)
+    }
+
     @Test func patternParsing() {
         #expect(SettingsView.parse(" make \n\npytest\nmake\n") == ["make", "pytest"])
     }

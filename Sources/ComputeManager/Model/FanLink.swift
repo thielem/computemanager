@@ -6,7 +6,8 @@ protocol FanControlling: AnyObject, Sendable {
     /// Called with every fresh status; nil when fand is unreachable. Any thread.
     var onStatus: (@Sendable (FanStatus?) -> Void)? { get set }
     func start()
-    func setMode(_ mode: FanMode)
+    /// `curve` nil keeps the last one sent; it is re-sent with every later `setMode` request.
+    func setMode(_ mode: FanMode, curve: FanCurve?)
     /// Blocking: set Auto and disconnect (app quit).
     func shutdown()
 }
@@ -14,7 +15,7 @@ protocol FanControlling: AnyObject, Sendable {
 /// fand client: one `subscribe` connection on its own thread, one control connection
 /// (`setMode`/`heartbeat`) on a serial queue. Heartbeat every `heartbeatInterval`; both
 /// connections reconnect with exponential backoff; the control connection re-sends the
-/// current mode right after (re)connecting, because fand reverts to Auto when it drops.
+/// current mode (+ curve) right after (re)connecting, because fand reverts to Auto when it drops.
 final class FanLink: FanControlling, @unchecked Sendable {
     // Control state is confined to `queue`; `subscriber`/`stopped`/`_onStatus` use `lock`.
     let path: String
@@ -27,6 +28,7 @@ final class FanLink: FanControlling, @unchecked Sendable {
     private let queue = DispatchQueue(label: "computemanager.fan.control")
     private var control: FanClient?
     private var desired: FanMode = .auto
+    private var desiredCurve: FanCurve?
     private var controlBackoff: TimeInterval
     private var nextAttempt = Date.distantPast
     private var timer: DispatchSourceTimer?
@@ -65,15 +67,20 @@ final class FanLink: FanControlling, @unchecked Sendable {
         th.start()
     }
 
-    func setMode(_ mode: FanMode) {
+    func setMode(_ mode: FanMode, curve: FanCurve? = nil) {
         queue.async { [self] in
             desired = mode
+            if let curve { desiredCurve = curve }
             if control == nil {
                 _ = connectControl()
             } else {
-                callControl(.setMode(SetModeRequest(mode: mode)))
+                callControl(request(mode))
             }
         }
+    }
+
+    private func request(_ mode: FanMode) -> FanRequest {
+        .setMode(SetModeRequest(mode: mode, curve: desiredCurve))
     }
 
     func shutdown() {
@@ -89,7 +96,7 @@ final class FanLink: FanControlling, @unchecked Sendable {
             if control == nil {
                 _ = connectControl()  // connecting sends setMode(auto)
             } else {
-                callControl(.setMode(SetModeRequest(mode: .auto)))
+                callControl(request(.auto))
             }
             control?.close()
             control = nil
@@ -108,7 +115,7 @@ final class FanLink: FanControlling, @unchecked Sendable {
         guard Date() >= nextAttempt else { return false }
         do {
             let c = try FanClient(path: path, timeout: clientTimeout)
-            let reply = try c.call(.setMode(SetModeRequest(mode: desired)))
+            let reply = try c.call(request(desired))
             control = c
             controlBackoff = minBackoff
             if case .setMode(let s) = reply { onStatus?(s) }
@@ -126,7 +133,7 @@ final class FanLink: FanControlling, @unchecked Sendable {
         guard reported != desired, control != nil, Date().timeIntervalSince(lastResend) >= resendInterval
         else { return }
         lastResend = Date()
-        callControl(.setMode(SetModeRequest(mode: desired)))
+        callControl(request(desired))
     }
 
     private func callControl(_ req: FanRequest) {

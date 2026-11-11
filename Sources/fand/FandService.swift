@@ -96,7 +96,15 @@ final class FandService: Sendable {
         case .status:
             return .success(.status(controller.status()))
         case .setMode(let r):
-            return .success(.setMode(controller.setMode(r.mode, connection: ctx.connectionId.raw, now: Monotonic.now())))
+            var curve: FanCurve?
+            if let c = r.curve {
+                guard let v = c.clamped(tick: controller.tick) else {
+                    return .failure(WireError(.badRequest, "invalid curve"))
+                }
+                curve = v
+            }
+            return .success(.setMode(controller.setMode(r.mode, curve: curve, connection: ctx.connectionId.raw,
+                                                        now: Monotonic.now())))
         case .heartbeat:
             controller.heartbeat(connection: ctx.connectionId.raw, now: Monotonic.now())
             return .success(.heartbeat)

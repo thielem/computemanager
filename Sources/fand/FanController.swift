@@ -16,7 +16,8 @@ import Shared
 /// Manual modes are also re-asserted on every tick if the SMC dropped them.
 final class FanController: @unchecked Sendable {  // all state guarded by `lock`
     let hw: FanHardware
-    let curve: FanCurve
+    /// Tick interval, fixed at start (not changeable over IPC).
+    let tick: TimeInterval
     let watchdogTimeout: TimeInterval
     private let thermal: @Sendable () -> ThermalState
     private let log: @Sendable (String) -> Void
@@ -24,6 +25,7 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
 
     private let lock = NSLock()
     private var mode: FanMode = .auto
+    private var _curve: FanCurve
     private var lastHeartbeat: Date?       // watchdog clock
     private var lastHeartbeatWall: Date?   // display only
     private var controllingConnection: UInt64?
@@ -41,7 +43,8 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
          wallClock: @escaping @Sendable () -> Date = { Date() },
          onChange: @escaping @Sendable (FanStatus) -> Void = { _ in }) {
         self.hw = hw
-        self.curve = curve
+        self.tick = curve.tick
+        self._curve = curve
         self.watchdogTimeout = watchdogTimeout
         self.thermal = thermal
         self.log = log
@@ -64,13 +67,20 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
         run { revertLocked("shutdown"); stopped = true; return last }
     }
 
+    /// `curve` must already be validated (`FanCurve.clamped`); nil keeps the current curve.
+    /// A new curve takes effect immediately (performance) and on every following tick.
     @discardableResult
-    func setMode(_ m: FanMode, connection: UInt64?, now: Date) -> FanStatus {
+    func setMode(_ m: FanMode, curve newCurve: FanCurve? = nil, connection: UInt64?, now: Date) -> FanStatus {
         run {
             guard !stopped else { return last }
             if let connection { controlConnections.insert(connection) }
             controllingConnection = connection
             beatLocked(now)
+            if let c = newCurve, c != _curve {
+                log("curve \(Int(c.lowTemp))-\(Int(c.highTemp)) h\(Int(c.hysteresis))")
+                _curve = c
+                curveState = CurveState(curve: c)
+            }
             if m != mode {
                 log("setMode \(mode.rawValue) -> \(m.rawValue)")
                 mode = m
@@ -126,6 +136,8 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
     /// Fresh status (reads the SMC).
     func status() -> FanStatus { run(notify: false) { refreshLocked() } }
 
+    var curve: FanCurve { lock.withLock { _curve } }
+
     var currentMode: FanMode {
         lock.lock()
         defer { lock.unlock() }
@@ -161,7 +173,7 @@ final class FanController: @unchecked Sendable {  // all state guarded by `lock`
     @discardableResult
     private func refreshLocked() -> FanStatus {
         last = FanStatus(mode: mode, fans: hw.readFans(), temps: hw.readTemps(), thermalState: thermal(),
-                         lastHeartbeat: lastHeartbeatWall, curve: curve)
+                         lastHeartbeat: lastHeartbeatWall, curve: _curve)
         return last
     }
 
