@@ -37,26 +37,40 @@ enum Runner {
         let single = o.command.count == 1
         let text = single ? o.command[0] : o.command.map(shellQuote).joined(separator: " ")
         let argv = single ? [shell(ctx.env), "-c", o.command[0]] : o.command
-        let acq = AcquireRequest(sessionId: session, cwd: ctx.cwd, command: text, pid: getpid(),
+        var acq = AcquireRequest(sessionId: session, cwd: ctx.cwd, command: text, pid: getpid(),
                                  maxRuntimeSeconds: o.maxRuntime, ticket: o.ticket,
                                  autoWrapped: false,  // K1: the hook never wraps
-                                 messagingSocket: ctx.env[ClaudeMessaging.socketEnv])
+                                 messagingSocket: ctx.env[ClaudeMessaging.socketEnv],
+                                 label: GitLabel.compute(cwd: ctx.cwd))
 
         var job: (id: UUID, max: TimeInterval, startedAt: Date)?
-        switch try? ctx.link.call(.acquire(acq)) {
-        case .acquire(.granted(let id, let max))?:
-            job = (id, max, Date())
-        case .acquire(.busy(let t))?:
-            ctx.stderr(CgateMessage.busy(t))
-            return CgateExit.busy
-        case .acquire(.off(let m))?:
-            ctx.stderr(m)
-            return CgateExit.gateOff
-        case .acquire(.ticketExpired(let t))?:
-            ctx.stderr(CgateMessage.ticketExpired(t))
-            return CgateExit.ticketExpired
-        default:
-            logUngated(ctx, session: session, command: text)
+        var announced = false
+        acquiring: while true {
+            switch try? ctx.link.call(.acquire(acq)) {
+            case .acquire(.granted(let id, let max))?:
+                job = (id, max, Date())
+            case .acquire(.busy(let t))?:
+                guard o.wait else {
+                    ctx.stderr(CgateMessage.busy(t))
+                    return CgateExit.busy
+                }
+                if !announced { ctx.stderr(CgateMessage.busyWaiting(t)) }
+                announced = true
+                acq.ticket = t.id
+                switch waitForSlot(t.id, ctx) {
+                case .ready: continue acquiring
+                case .exit(let code): return code
+                }
+            case .acquire(.off(let m))?:
+                ctx.stderr(m)
+                return CgateExit.gateOff
+            case .acquire(.ticketExpired(let t))?:
+                ctx.stderr(CgateMessage.ticketExpired(t))
+                return CgateExit.ticketExpired
+            default:
+                logUngated(ctx, session: session, command: text)
+            }
+            break
         }
 
         // Signal handlers before spawn (L3); the forwarder kills once the pid is known.
@@ -246,6 +260,28 @@ final class Forwarder: @unchecked Sendable {  // guarded by lock
         kill(-p, s)
         DispatchQueue.global().asyncAfter(deadline: .now() + grace) { [self] in
             if !lock.withLock({ exited }) { kill(-p, SIGKILL) }
+        }
+    }
+}
+
+private enum WaitOutcome { case ready, exit(Int32) }
+
+/// `run --wait`: long-poll the ticket. Ready (or app gone: the next acquire decides) → claim;
+/// expired → 79; gate turned off while waiting → 76.
+private func waitForSlot(_ ticket: String, _ ctx: RunContext) -> WaitOutcome {
+    while true {
+        switch try? ctx.link.call(.waitTicket(WaitTicketRequest(ticket: ticket)),
+                                  timeout: Defaults.waitTicketPollWindow + 5) {
+        case .waitTicket(.pending)?:
+            if case .status(let s)? = try? ctx.link.call(.status), s.level.isOff {
+                ctx.stderr(CgateMessage.gateOff)
+                return .exit(CgateExit.gateOff)
+            }
+        case .waitTicket(.expired(let t))?:
+            ctx.stderr(CgateMessage.ticketExpired(t))
+            return .exit(CgateExit.ticketExpired)
+        default:
+            return .ready
         }
     }
 }

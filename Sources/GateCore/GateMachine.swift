@@ -404,7 +404,7 @@ struct GateMachine: Sendable {
     private func makeLease(_ r: AcquireRequest, id: UUID, start: Date, max: TimeInterval) -> Lease {
         Lease(jobId: id, sessionId: r.sessionId, cwd: r.cwd, command: r.command, pid: r.pid,
               pgid: r.pgid, startedAt: start, maxRuntimeSeconds: max, autoWrapped: r.autoWrapped,
-              messagingSocket: r.messagingSocket)
+              messagingSocket: r.messagingSocket, label: r.label)
     }
 
     private func effectiveMax(_ requested: TimeInterval?) -> TimeInterval {

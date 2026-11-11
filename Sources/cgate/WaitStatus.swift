@@ -28,16 +28,16 @@ enum Waiter {
 enum StatusCommand {
     static func render(_ s: GateStatus, now: Date = Date()) -> String {
         var out = ["gate \(s.level.rawValue), slots \(s.leases.count)/\(s.effectiveSlots)"
-            + (s.nextSlotETA.map { ", next slot ~\(CgateMessage.clock($0))" } ?? "")]
+            + (s.nextSlotETA.map { ", next slot \(CgateMessage.latest($0))" } ?? "")]
         for l in s.leases {
             let elapsed = DurationFormat.format(max(0, now.timeIntervalSince(l.startedAt)))
             let cmd = l.command.count <= 60 ? l.command : String(l.command.prefix(59)) + "…"
-            out.append("  \(l.project) [\(l.sessionId.prefix(8))] \(elapsed)/\(DurationFormat.format(l.maxRuntimeSeconds)) "
+            out.append("  \(l.displayName) [\(l.sessionId.prefix(8))] \(elapsed)/\(DurationFormat.format(l.maxRuntimeSeconds)) "
                 + "\(l.state.rawValue)  \(cmd)")
         }
         for t in s.tickets {
             let held = s.heldSlot?.ticketId == t.id ? " held until \(CgateMessage.clock(s.heldSlot?.until))" : ""
-            out.append("  ticket \(t.id) #\(t.position) eta ~\(CgateMessage.clock(t.eta))\(held)")
+            out.append("  ticket \(t.id) #\(t.position) slot \(CgateMessage.latest(t.eta))\(held)")
         }
         return out.joined(separator: "\n")
     }

@@ -170,6 +170,38 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         #expect(Date().timeIntervalSince(start) < 5)
     }
 
+    @Test func waitFlagBlocksThenRuns() async throws {
+        let h = try Harness()
+        let ctx = h.ctx()
+        async let first = offPool { Runner.run(opts(["sleep 0.5"]), ctx) }
+        #expect(await eventually { await h.status().leases.count == 1 })
+        var o = opts(["true"])
+        o.session = "other"
+        o.wait = true
+        let o2 = o
+        #expect(await offPool { Runner.run(o2, ctx) } == 0)
+        #expect(await first == 0)
+        #expect(h.stderr.all.filter { $0.hasPrefix("compute busy: ticket t1") }.count == 1)
+        let st = await h.status()
+        #expect(st.tickets.isEmpty && st.leases.isEmpty)
+    }
+
+    @Test func waitFlagRespectsGateOff() async throws {
+        let h = try Harness()
+        let ctx = h.ctx()
+        async let first = offPool { Runner.run(opts(["sleep 1"]), ctx) }
+        #expect(await eventually { await h.status().leases.count == 1 })
+        var o = opts(["true"])
+        o.session = "other"
+        o.wait = true
+        let o2 = o
+        async let second = offPool { Runner.run(o2, ctx) }
+        #expect(await eventually { await h.status().tickets.count == 1 })
+        _ = await h.svc.handle(.setGate(SetGateRequest(level: .noMore)))
+        #expect(await second == CgateExit.gateOff)
+        #expect(await first == 0)
+    }
+
     @Test func walltimeSoftThenKill() async throws {
         let h = try Harness()
         let ctx = h.ctx()

@@ -49,11 +49,13 @@ public struct AcquireRequest: Codable, Sendable, Equatable {
     /// Set when re-registering an already running job after the heartbeat answered
     /// `unknownJob` (app restarted). Always granted; see `Reattach`.
     public var reattach: Reattach?
+    /// Display label: git toplevel folder (+ branch if not main/master); nil → cwd basename.
+    public var label: String?
 
     public init(sessionId: String, cwd: String, command: String, pid: Int32, pgid: Int32? = nil,
                 maxRuntimeSeconds: TimeInterval? = nil, ticket: String? = nil,
                 autoWrapped: Bool = false, messagingSocket: String? = nil,
-                reattach: Reattach? = nil) {
+                reattach: Reattach? = nil, label: String? = nil) {
         self.sessionId = sessionId
         self.cwd = cwd
         self.command = CommandText.capped(command)
@@ -64,6 +66,7 @@ public struct AcquireRequest: Codable, Sendable, Equatable {
         self.autoWrapped = autoWrapped
         self.messagingSocket = messagingSocket
         self.reattach = reattach
+        self.label = label
     }
 }
 

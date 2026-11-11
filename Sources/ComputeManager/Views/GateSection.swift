@@ -28,7 +28,7 @@ struct GateSection: View {
                 Text("\(gate.status.slots)").monospacedDigit()
                 Stepper("", value: Binding(get: { gate.status.slots },
                                            set: { n in Task { await gate.setSlots(n) } }),
-                        in: 1...16)
+                        in: 0...16)
                     .labelsHidden()
             }
 

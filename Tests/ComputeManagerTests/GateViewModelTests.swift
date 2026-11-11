@@ -56,8 +56,10 @@ import Testing
         await vm.setSlots(3)
         #expect(fake.requests == [.setGate(SetGateRequest(level: .noMore, slots: 3))])
         #expect(vm.status.slots == 3)
-        await vm.setSlots(0)
-        #expect(vm.status.slots == 1)
+        await vm.setSlots(0)  // 0 = no new jobs, running ones continue
+        #expect(vm.status.slots == 0 && vm.status.level == .noMore)
+        await vm.setSlots(-1)
+        #expect(vm.status.slots == 0)
     }
 
     @Test func killAndPersist() async {

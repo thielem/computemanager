@@ -59,7 +59,7 @@ final class GateViewModel {
     func cancelOffChoice() { offChoicePending = false }
 
     func setSlots(_ n: Int) async {
-        await send(.setGate(SetGateRequest(level: status.level, slots: max(1, n))))
+        await send(.setGate(SetGateRequest(level: status.level, slots: max(0, n))))
     }
 
     /// Per-job ✕: a running job is asked to stop (soft); a stop-requested one is killed.

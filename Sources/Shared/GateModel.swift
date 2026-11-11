@@ -92,17 +92,22 @@ public struct Lease: Codable, Sendable, Equatable, Identifiable {
     public var stopReason: StopReason?
     /// Claude Code subagent that started the job (hook `agent_id`); nil = main session/unknown.
     public var agentId: String?
+    /// From `AcquireRequest.label` (git folder + branch); nil from older cgate.
+    public var label: String?
 
     public var id: UUID { jobId }
     /// Project name = last path component of cwd.
     public var project: String { (cwd as NSString).lastPathComponent }
+    /// What the UI shows: `label`, else `project`.
+    public var displayName: String { label ?? project }
     /// started_at + max runtime.
     public var deadline: Date { startedAt.addingTimeInterval(maxRuntimeSeconds) }
 
     public init(jobId: UUID = UUID(), sessionId: String, cwd: String, command: String,
                 pid: Int32, pgid: Int32?, startedAt: Date, maxRuntimeSeconds: TimeInterval,
                 autoWrapped: Bool, messagingSocket: String? = nil, state: LeaseState = .running,
-                stopRequestedAt: Date? = nil, stopReason: StopReason? = nil, agentId: String? = nil) {
+                stopRequestedAt: Date? = nil, stopReason: StopReason? = nil, agentId: String? = nil,
+                label: String? = nil) {
         self.jobId = jobId
         self.sessionId = sessionId
         self.cwd = cwd
@@ -117,6 +122,7 @@ public struct Lease: Codable, Sendable, Equatable, Identifiable {
         self.stopRequestedAt = stopRequestedAt
         self.stopReason = stopReason
         self.agentId = agentId
+        self.label = label
     }
 }
 

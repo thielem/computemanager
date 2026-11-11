@@ -174,9 +174,11 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         c.year = 2026; c.month = 1; c.day = 2; c.hour = 9; c.minute = 5
         let d = Calendar.current.date(from: c)!
         #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 2, eta: d)) ==
-            "compute busy: ticket t3, position 2, next slot ~09:05, then held for you 2 min. Start `cgate wait --ticket t3` in the background now; you'll be notified when it completes. Don't rely on any other message; do other work meanwhile")
+            "compute busy: ticket t3, position 2, next slot by ~09:05 (latest), then held for you 2 min. Start `cgate wait --ticket t3` in the background now; you'll be notified when it completes. Don't rely on any other message; do other work meanwhile")
         #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 2, eta: d, holdSeconds: 90)).contains("held for you 90 s."))
-        #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 1, eta: nil)).contains("next slot ~?, then held for you 2 min."))
+        #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 1, eta: nil)).contains("next slot time unknown, then held for you 2 min."))
+        #expect(CgateMessage.busyWaiting(TicketInfo(id: "t3", position: 2, eta: d))
+                .hasPrefix("compute busy: ticket t3, position 2, next slot by ~09:05 (latest); waiting"))
         #expect(CgateMessage.walltimeKilled(max: 900) == "killed: exceeded declared max runtime (15m)")
         #expect(CgateMessage.ticketExpired("t3") == "ticket t3 expired; retry cgate run")
         #expect(CgateMessage.slotReady(ticket: "t3", heldUntil: d, now: d - 120) ==

@@ -40,10 +40,16 @@ public enum CgateMessage {
 
     /// Exit 75; also printed by `cgate run` when busy.
     public static func busy(_ t: TicketInfo) -> String {
-        "compute busy: ticket \(t.id), position \(t.position), next slot ~\(clock(t.eta)), "
+        "compute busy: ticket \(t.id), position \(t.position), next slot \(latest(t.eta)), "
             + "then held for you \(human(t.holdSeconds ?? Defaults.ticketHold)). "
             + "Start `cgate wait --ticket \(t.id)` in the background now; you'll be notified when it "
             + "completes. Don't rely on any other message; do other work meanwhile"
+    }
+
+    /// `cgate run --wait` when busy: printed once, then it waits and runs by itself.
+    public static func busyWaiting(_ t: TicketInfo) -> String {
+        "compute busy: ticket \(t.id), position \(t.position), next slot \(latest(t.eta)); "
+            + "waiting, the command starts by itself once the slot is free"
     }
 
     /// Exit 77.
@@ -91,6 +97,11 @@ public enum CgateMessage {
             + "Continue without heavy runs or stop and report"
 
     // MARK: Formatting helpers
+
+    /// ETAs are upper bounds (lease start + declared max runtime): `by ~10:53 (latest)`.
+    public static func latest(_ date: Date?) -> String {
+        date.map { "by ~\(clock($0)) (latest)" } ?? "time unknown"
+    }
 
     /// `HH:MM` in local time, or `?` when unknown.
     public static func clock(_ date: Date?) -> String {

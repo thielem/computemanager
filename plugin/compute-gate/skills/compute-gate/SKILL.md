@@ -13,6 +13,13 @@ The user's machine has a limited number of slots for heavy runs. Respect it.
   Several arguments after `--` are run directly as argv (`cgate run -- make -j8`); one argument is
   a shell line. A `cd` inside the quoted line does not persist after the command.
   Keep making tool calls meanwhile so you see notices.
+- **Chains:** use `--wait` so each step queues instead of failing busy:
+  `cgate run --wait --max 10m -- 'make' && cgate run --wait --max 5m -- 'make test'`.
+  `--wait` blocks until the slot is free, then runs (exit 76 if the gate goes off, 79 if the
+  ticket expires).
+- **Exit code = last command of a pipeline:** don't pipe into `tail`/`head`; redirect
+  (`> /tmp/x.log 2>&1`) and read the file afterwards.
+- ETAs ("next slot by ~10:53 (latest)") are upper bounds: running jobs' declared max runtimes.
 - **Denied with "Compute gate: heavy command. Re-run as: …":** the hook does not run it for
   you; re-run exactly the suggested line (fill in `--max`) with `run_in_background: true`.
 - **Busy (exit 75, "compute busy: ticket N …"):** don't retry in a loop. Start
