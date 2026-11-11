@@ -117,6 +117,15 @@ import Testing
         #expect(store.load() == .init(settings: s, level: .noMore))
     }
 
+    @Test func storeLoadsOldFileWithoutHoldAndGrace() throws {
+        let url = URL(fileURLWithPath: "/tmp/cm-test-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data(#"{"level":"on","settings":{"slots":3,"patterns":["make"],"defaultMaxRuntimeSeconds":600,"maxRuntimeCapSeconds":1800}}"#.utf8)
+            .write(to: url)
+        let s = GateStore(url: url).load().settings
+        #expect(s.slots == 3 && s.ticketHoldSeconds == 120 && s.walltimeGraceSeconds == 60)
+    }
+
     @Test func storeKeepsBackupOfUnreadableFile() throws {
         let url = URL(fileURLWithPath: "/tmp/cm-test-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).json")
         let store = GateStore(url: url)

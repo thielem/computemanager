@@ -12,13 +12,14 @@ import Foundation
 //   Leaving the gate "off" means going back to `on`.
 //
 // Walltime (GATE-5): at started_at + maxRuntime → lease `stopRequested` (reason walltime),
-//   notice to the job's session; at + `Defaults.walltimeGrace` → heartbeat answers
+//   notice to the job's session; at + `settings.walltimeGraceSeconds` (default
+//   `Defaults.walltimeGrace`; a change also moves kills already in grace) → heartbeat answers
 //   `hardStop(walltime)`; cgate kills its pgid and exits 77.
 //
 // Tickets (GATE-12): FIFO, keyed per (sessionId, cwd). A busy acquire issues a ticket (or
 //   returns the existing ticket of that (session, cwd)). Session `unknown` never shares: every
 //   busy acquire from it gets its own ticket. When a slot frees and tickets exist, it is held
-//   for the oldest ticket for `Defaults.ticketHold`; only an acquire carrying that ticket can
+//   for the oldest ticket for `settings.ticketHoldSeconds` (new holds); only an acquire carrying that ticket can
 //   take it. Unclaimed → ticket expires, slot goes to the next ticket (or free).
 //   `run --ticket` with a ticket that is still queued (not yet held) → `busy` with the current
 //   position/ETA; the ticket is kept. ETA (GATE-3) = min over running leases of
@@ -139,11 +140,14 @@ public struct TicketInfo: Codable, Sendable, Equatable {
     public var position: Int
     /// Expected time of next free slot; nil if unknown (e.g. gate has no running leases).
     public var eta: Date?
+    /// Hold duration once the slot is ready (nil from older apps → `Defaults.ticketHold`).
+    public var holdSeconds: TimeInterval?
 
-    public init(id: String, position: Int, eta: Date?) {
+    public init(id: String, position: Int, eta: Date?, holdSeconds: TimeInterval? = nil) {
         self.id = id
         self.position = position
         self.eta = eta
+        self.holdSeconds = holdSeconds
     }
 }
 
@@ -177,15 +181,35 @@ public struct GateSettings: Codable, Sendable, Equatable {
     public var patterns: [String]
     public var defaultMaxRuntimeSeconds: TimeInterval
     public var maxRuntimeCapSeconds: TimeInterval
+    /// How long a freed slot is held for the oldest ticket (applies to new holds).
+    public var ticketHoldSeconds: TimeInterval
+    /// Walltime soft notice → hard kill delay.
+    public var walltimeGraceSeconds: TimeInterval
 
     public init(slots: Int = Defaults.slots,
                 patterns: [String] = Defaults.autoWrapPatterns,
                 defaultMaxRuntimeSeconds: TimeInterval = Defaults.defaultMaxRuntime,
-                maxRuntimeCapSeconds: TimeInterval = Defaults.maxRuntimeCap) {
+                maxRuntimeCapSeconds: TimeInterval = Defaults.maxRuntimeCap,
+                ticketHoldSeconds: TimeInterval = Defaults.ticketHold,
+                walltimeGraceSeconds: TimeInterval = Defaults.walltimeGrace) {
         self.slots = slots
         self.patterns = patterns
         self.defaultMaxRuntimeSeconds = defaultMaxRuntimeSeconds
         self.maxRuntimeCapSeconds = maxRuntimeCapSeconds
+        self.ticketHoldSeconds = ticketHoldSeconds
+        self.walltimeGraceSeconds = walltimeGraceSeconds
+    }
+
+    /// Hold and grace are optional on the wire (older gate.json / peers lack them).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        slots = try c.decode(Int.self, forKey: .slots)
+        patterns = try c.decode([String].self, forKey: .patterns)
+        defaultMaxRuntimeSeconds = try c.decode(TimeInterval.self, forKey: .defaultMaxRuntimeSeconds)
+        maxRuntimeCapSeconds = try c.decode(TimeInterval.self, forKey: .maxRuntimeCapSeconds)
+        ticketHoldSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .ticketHoldSeconds) ?? Defaults.ticketHold
+        walltimeGraceSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .walltimeGraceSeconds)
+            ?? Defaults.walltimeGrace
     }
 }
 

@@ -77,7 +77,8 @@ struct GateMachine: Sendable {
     func ticketInfo(_ id: String, now: Date) -> TicketInfo? {
         guard let i = tickets.firstIndex(where: { $0.id == id }) else { return nil }
         if let h = hold(of: id) {
-            return TicketInfo(id: id, position: i + 1, eta: h.until.addingTimeInterval(-Defaults.ticketHold))
+            return TicketInfo(id: id, position: i + 1, eta: h.until.addingTimeInterval(-settings.ticketHoldSeconds),
+                              holdSeconds: settings.ticketHoldSeconds)
         }
         let j = i - held.count
         let d = deadlines
@@ -85,7 +86,7 @@ struct GateMachine: Sendable {
         if !level.isOff, !d.isEmpty {
             eta = d[j % d.count].addingTimeInterval(Double(j / d.count) * settings.defaultMaxRuntimeSeconds)
         }
-        return TicketInfo(id: id, position: i + 1, eta: eta)
+        return TicketInfo(id: id, position: i + 1, eta: eta, holdSeconds: settings.ticketHoldSeconds)
     }
 
     func snapshot(now: Date) -> GateStatus {
@@ -107,10 +108,11 @@ struct GateMachine: Sendable {
                 leases[i].state = .stopRequested
                 leases[i].stopReason = .walltime
                 leases[i].stopRequestedAt = now
-                notify(l.sessionId, CgateMessage.walltimeNotice(command: l.command, max: l.maxRuntimeSeconds),
+                notify(l.sessionId, CgateMessage.walltimeNotice(command: l.command, max: l.maxRuntimeSeconds,
+                                                                grace: settings.walltimeGraceSeconds),
                        socket: l.messagingSocket)
             }
-            if now >= l.deadline.addingTimeInterval(Defaults.walltimeGrace) {
+            if now >= l.deadline.addingTimeInterval(settings.walltimeGraceSeconds) {
                 leases[i].state = .killing
             }
         }
@@ -123,10 +125,10 @@ struct GateMachine: Sendable {
         waitLinger = waitLinger.filter { $0.value > now }
         if level.isOff { held = [] }  // tickets keep their place
         while freeSlots > 0, let next = queuedTickets.first {
-            let until = now.addingTimeInterval(Defaults.ticketHold)
+            let until = now.addingTimeInterval(settings.ticketHoldSeconds)
             held.append(HeldSlot(ticketId: next.id, until: until))
             if !isWaited(next.id, now: now) {
-                notify(next.sessionId, CgateMessage.slotReady(ticket: next.id, heldUntil: until),
+                notify(next.sessionId, CgateMessage.slotReady(ticket: next.id, heldUntil: until, now: now),
                        kind: .slotReady(ticket: next.id), socket: next.socket(in: self))
             }
         }
@@ -368,6 +370,9 @@ struct GateMachine: Sendable {
         return min(max(v, 1), settings.maxRuntimeCapSeconds)
     }
 
+    static let ticketHoldRange: ClosedRange<TimeInterval> = 30...600
+    static let graceRange: ClosedRange<TimeInterval> = 10...300
+
     static func clampSlots(_ n: Int) -> Int { min(max(n, 0), 64) }
 
     static func sanitized(_ s: GateSettings) -> GateSettings {
@@ -375,6 +380,8 @@ struct GateMachine: Sendable {
         s.slots = clampSlots(s.slots)
         s.maxRuntimeCapSeconds = max(s.maxRuntimeCapSeconds, 1)
         s.defaultMaxRuntimeSeconds = min(max(s.defaultMaxRuntimeSeconds, 1), s.maxRuntimeCapSeconds)
+        s.ticketHoldSeconds = min(max(s.ticketHoldSeconds, ticketHoldRange.lowerBound), ticketHoldRange.upperBound)
+        s.walltimeGraceSeconds = min(max(s.walltimeGraceSeconds, graceRange.lowerBound), graceRange.upperBound)
         return s
     }
 }

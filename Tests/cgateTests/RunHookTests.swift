@@ -176,7 +176,7 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         async let code = offPool { Runner.run(opts(["sleep 30"], max: 60), ctx) }
         #expect(await eventually { await h.status().leases.first?.pgid != nil })
         h.clock.advance(60)
-        #expect(await eventually { h.stderr.all.contains { $0.contains("exceeded its declared max runtime (1m)") } })
+        #expect(await eventually { h.stderr.all.contains { $0.contains("max runtime (1m) of `sleep 30` exceeded") && $0.hasSuffix("killed in 60 s") } })
         h.clock.advance(60)
         #expect(await code == CgateExit.walltimeKill)
         #expect(h.stderr.all.last == CgateMessage.walltimeKilled(max: 60))
@@ -234,7 +234,7 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         let o = o2
         #expect(await offPool { Runner.run(o, ctx) } == CgateExit.busy)
         #expect(await offPool { Waiter.run(ticket: "t1", link: link, stderr: { lines.add($0) }) } == 0)
-        #expect(lines.all.last?.hasPrefix("slot ready (ticket t1, held until") == true)
+        #expect(lines.all.last?.hasPrefix("Slot ready for ticket t1 — claim within") == true)
         #expect(await first == 0)
         #expect(await offPool { Runner.run(RunOptions(maxRuntime: nil, session: "other", ticket: "t1",
                                                       command: ["true"]), ctx) } == 0)

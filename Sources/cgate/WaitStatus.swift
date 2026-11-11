@@ -9,7 +9,7 @@ enum Waiter {
         while true {
             switch try? link.call(.waitTicket(WaitTicketRequest(ticket: ticket)), timeout: pollTimeout) {
             case .waitTicket(.ready(let t, let until))?:
-                stderr(CgateMessage.slotReady(ticket: t, heldUntil: until))
+                stderr(CgateMessage.slotReady(ticket: t, heldUntil: until, now: Date()))
                 return CgateExit.ok
             case .waitTicket(.expired(let t))?:
                 stderr(CgateMessage.ticketExpired(t))

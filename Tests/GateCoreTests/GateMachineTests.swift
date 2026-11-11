@@ -199,10 +199,10 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
         let t1 = busy(m.acquire(req("c"), now: t0))
         let t2 = busy(m.acquire(req("d"), now: t0))
         let t3 = busy(m.acquire(req("e"), now: t0))
-        #expect(t1 == TicketInfo(id: "t1", position: 1, eta: t0 + 300))
-        #expect(t2 == TicketInfo(id: "t2", position: 2, eta: t0 + 600))
+        #expect(t1 == TicketInfo(id: "t1", position: 1, eta: t0 + 300, holdSeconds: 120))
+        #expect(t2 == TicketInfo(id: "t2", position: 2, eta: t0 + 600, holdSeconds: 120))
         // Third in line: wraps around, plus one default max (15 min).
-        #expect(t3 == TicketInfo(id: "t3", position: 3, eta: t0 + 300 + 900))
+        #expect(t3 == TicketInfo(id: "t3", position: 3, eta: t0 + 300 + 900, holdSeconds: 120))
         // Raw deadlines: overdue ETAs don't move with the clock (L4).
         #expect(m.ticketInfo("t1", now: t0 + 400)?.eta == t0 + 300)
     }
@@ -361,6 +361,28 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
                                    maxRuntimeCapSeconds: 600), now: t0)
         #expect(m.settings.slots == 0 && m.settings.defaultMaxRuntimeSeconds == 600)
         #expect(m.settings.patterns == ["x"])
+        m.setSettings(GateSettings(ticketHoldSeconds: 1, walltimeGraceSeconds: 9999), now: t0)
+        #expect(m.settings.ticketHoldSeconds == 30 && m.settings.walltimeGraceSeconds == 300)
+        m.setSettings(GateSettings(ticketHoldSeconds: 9999, walltimeGraceSeconds: 0), now: t0)
+        #expect(m.settings.ticketHoldSeconds == 600 && m.settings.walltimeGraceSeconds == 10)
+    }
+
+    @Test func holdFromSettings() throws {
+        let m = machine(slots: 1)
+        var s = m.settings
+        s.ticketHoldSeconds = 90
+        m.setSettings(s, now: t0)
+        let a = try #require(granted(m.acquire(req("a"), now: t0)))
+        let t = try #require(busy(m.acquire(req("b"), now: t0)))
+        #expect(t.holdSeconds == 90 && CgateMessage.busy(t).contains("then held for you 90 s"))
+        m.release(a, now: t0)
+        #expect(m.held.first?.until == t0 + 90)
+        #expect(m.notices.map(\.text) == [CgateMessage.slotReady(ticket: "t1", heldUntil: t0 + 90, now: t0)])
+        #expect(m.notices[0].text.contains("claim within 90 s"))
+        m.advance(now: t0 + 89)
+        #expect(m.tickets.count == 1)
+        m.advance(now: t0 + 90)
+        #expect(m.tickets.isEmpty)
     }
 }
 
@@ -371,11 +393,24 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
         #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 59) == .continue)
         m.outbox = []
         #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 60) == .softStop(reason: .walltime))
-        #expect(m.notices.count == 1 && m.notices[0].text.contains("exceeded its declared max runtime (1m)"))
+        #expect(m.notices.count == 1 && m.notices[0].text.contains("max runtime (1m) of `make` exceeded"))
         #expect(m.outbox == [Push(sessionId: "a", socket: "/tmp/cc-socks/1.sock", text: m.notices[0].text)])
         #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 119) == .softStop(reason: .walltime))
         #expect(m.notices.count == 1)
         #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 120) == .hardStop(reason: .walltime))
+    }
+
+    @Test func graceFromSettings() throws {
+        let m = machine()
+        var s = m.settings
+        s.walltimeGraceSeconds = 30
+        m.setSettings(s, now: t0)
+        let a = try #require(granted(m.acquire(req("a", max: 60), now: t0)))
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 60) == .softStop(reason: .walltime))
+        #expect(m.notices.map(\.text) == [CgateMessage.walltimeNotice(command: "make", max: 60, grace: 30)])
+        #expect(m.notices[0].text.hasSuffix("killed in 30 s"))
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 89) == .softStop(reason: .walltime))
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 90) == .hardStop(reason: .walltime))
     }
 
     @Test func lateHeartbeatJumpsToKill() throws {

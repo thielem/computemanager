@@ -75,6 +75,16 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(soft.soft == true)
     }
 
+    @Test func gateSettingsDecodeWithoutHoldAndGrace() throws {
+        let old = #"{"slots":3,"patterns":["make"],"defaultMaxRuntimeSeconds":600,"maxRuntimeCapSeconds":1800}"#
+        let s = try JSONDecoder().decode(GateSettings.self, from: Data(old.utf8))
+        #expect(s == GateSettings(slots: 3, patterns: ["make"], defaultMaxRuntimeSeconds: 600,
+                                  maxRuntimeCapSeconds: 1800))
+        #expect(s.ticketHoldSeconds == Defaults.ticketHold && s.walltimeGraceSeconds == Defaults.walltimeGrace)
+        let t = try JSONDecoder().decode(TicketInfo.self, from: Data(#"{"id":"t1","position":1}"#.utf8))
+        #expect(t.holdSeconds == nil)
+    }
+
     @Test func gateRepliesRoundTrip() throws {
         let lease = Lease(sessionId: "s", cwd: "/a/proj", command: "make", pid: 1, pgid: 2,
                           startedAt: t0, maxRuntimeSeconds: 900, autoWrapped: false,
@@ -158,12 +168,18 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         c.year = 2026; c.month = 1; c.day = 2; c.hour = 9; c.minute = 5
         let d = Calendar.current.date(from: c)!
         #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 2, eta: d)) ==
-            "compute busy: ticket t3, position 2, next slot ~09:05. Run in background: cgate wait --ticket t3; do other work meanwhile")
-        #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 1, eta: nil)).contains("next slot ~?."))
+            "compute busy: ticket t3, position 2, next slot ~09:05, then held for you 2 min. Run in background: cgate wait --ticket t3; do other work meanwhile")
+        #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 2, eta: d, holdSeconds: 90)).contains("held for you 90 s."))
+        #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 1, eta: nil)).contains("next slot ~?, then held for you 2 min."))
         #expect(CgateMessage.walltimeKilled(max: 900) == "killed: exceeded declared max runtime (15m)")
         #expect(CgateMessage.ticketExpired("t3") == "ticket t3 expired; retry cgate run")
-        #expect(CgateMessage.slotReady(ticket: "t3", heldUntil: d) ==
-            "slot ready (ticket t3, held until 09:05): cgate run --ticket t3 --max ... -- <cmd>")
+        #expect(CgateMessage.slotReady(ticket: "t3", heldUntil: d, now: d - 120) ==
+            "Slot ready for ticket t3 — claim within 2 min with `cgate run --ticket t3 --max <est> -- '<cmd>'`, held until 09:05.")
+        #expect(CgateMessage.walltimeNotice(command: "make", max: 600, grace: 60) ==
+            "compute gate: max runtime (10m) of `make` exceeded. Stop it now — the process will be killed in 60 s")
+        #expect(CgateMessage.jobStopNotice(command: "make").contains("will not be killed automatically"))
+        #expect([CgateMessage.human(60), CgateMessage.human(90), CgateMessage.human(120), CgateMessage.human(600)]
+                == ["60 s", "90 s", "2 min", "10 min"])
         #expect(CgateMessage.gateOff == "Compute gate off — continue without heavy runs or stop and report")
     }
 

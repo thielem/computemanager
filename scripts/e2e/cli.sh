@@ -22,7 +22,7 @@ waited=$(( $(date +%s) - start ))
 wait $A; arc=$?
 check "job A completed normally (rc $arc)" test $arc -eq 0
 check "wait exit 0 after slot freed (${waited}s): $(cat "$T/w.err")" \
-  bash -c "[[ $rc -eq 0 && $waited -ge 3 ]] && grep -q 'slot ready (ticket $TICKET, held until' '$T/w.err'"
+  bash -c "[[ $rc -eq 0 && $waited -ge 3 ]] && grep -q 'Slot ready for ticket $TICKET — claim within' '$T/w.err'"
 iso cgate run --session e2e-b --ticket "$TICKET" --max 1m -- 'echo claimed' >"$T/c.out" 2>"$T/c.err"; rc=$?
 check "run --ticket claims held slot (rc $rc, out $(cat "$T/c.out"))" bash -c "[[ $rc -eq 0 ]] && grep -q claimed '$T/c.out'"
 
@@ -41,9 +41,9 @@ echo "-- walltime: notice at max, kill after 60 s grace (exit 77)"
 iso cgate run --session e2e-w --max 2s -- 'sleep 300' >"$T/wt.out" 2>"$T/wt.err" &
 W=$!
 sleep 5
-check "walltime notice printed by cgate: $(head -1 "$T/wt.err")" has "$T/wt.err" 'exceeded its declared max runtime'
+check "walltime notice printed by cgate: $(head -1 "$T/wt.err")" has "$T/wt.err" 'max runtime (2s) of'
 out=$(hook '{"session_id":"e2e-w","cwd":"/tmp","tool_name":"Read","tool_input":{}}')
-check "walltime notice via hook → deny: ${out:0:140}" grep -q 'exceeded its declared max runtime' <<<"$out"
+check "walltime notice via hook → deny: ${out:0:140}" grep -q 'max runtime (2s) of' <<<"$out"
 check "notice delivered only once" test -z "$(hook '{"session_id":"e2e-w","cwd":"/tmp","tool_name":"Read","tool_input":{}}')"
 check "process still running during grace" kill -0 $W
 start=$(date +%s); wait $W; rc=$?; took=$(( $(date +%s) - start + 5 ))

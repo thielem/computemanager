@@ -108,7 +108,8 @@ enum Runner {
             case .heartbeat(.softStop(let r))?:
                 if !softNoticed {
                     softNoticed = true
-                    ctx.stderr(r == .walltime ? CgateMessage.walltimeNotice(command: text, max: j.max)
+                    ctx.stderr(r == .walltime ? CgateMessage.walltimeNotice(command: text, max: j.max,
+                                                                            grace: walltimeGrace(ctx))
                                : r == .userKill ? CgateMessage.jobStopNotice(command: text)
                                : CgateMessage.softStopNotice)
                 }
@@ -247,4 +248,10 @@ final class Forwarder: @unchecked Sendable {  // guarded by lock
             if !lock.withLock({ exited }) { kill(-p, SIGKILL) }
         }
     }
+}
+
+/// Current walltime grace from the app's settings (older/unreachable app → default).
+private func walltimeGrace(_ ctx: RunContext) -> TimeInterval {
+    if case .status(let s)? = try? ctx.link.call(.status) { return s.settings.walltimeGraceSeconds }
+    return Defaults.walltimeGrace
 }

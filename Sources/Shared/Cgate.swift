@@ -40,7 +40,8 @@ public enum CgateMessage {
 
     /// Exit 75; also printed by `cgate run` when busy.
     public static func busy(_ t: TicketInfo) -> String {
-        "compute busy: ticket \(t.id), position \(t.position), next slot ~\(clock(t.eta)). "
+        "compute busy: ticket \(t.id), position \(t.position), next slot ~\(clock(t.eta)), "
+            + "then held for you \(human(t.holdSeconds ?? Defaults.ticketHold)). "
             + "Run in background: cgate wait --ticket \(t.id); do other work meanwhile"
     }
 
@@ -57,31 +58,31 @@ public enum CgateMessage {
         "ticket \(id) expired; retry cgate run"
     }
 
-    /// `cgate wait` exit 0, and the "slot ready" notice text (literal `--max ... -- <cmd>`).
-    public static func slotReady(ticket: String, heldUntil: Date) -> String {
-        "slot ready (ticket \(ticket), held until \(clock(heldUntil))): "
-            + "cgate run --ticket \(ticket) --max ... -- <cmd>"
+    /// `cgate wait` exit 0, and the "slot ready" notice text. `now` gives the time left to claim.
+    public static func slotReady(ticket: String, heldUntil: Date, now: Date) -> String {
+        "Slot ready for ticket \(ticket) — claim within \(human(heldUntil.timeIntervalSince(now))) with "
+            + "`cgate run --ticket \(ticket) --max <est> -- '<cmd>'`, held until \(clock(heldUntil))."
     }
 
     // MARK: Stop notices (delivered once via the `"*"` hook, AGENT-5)
 
     /// Walltime reached (soft step of GATE-5).
-    public static func walltimeNotice(command: String, max: TimeInterval) -> String {
-        "compute gate: `\(shorten(command))` exceeded its declared max runtime "
-            + "(\(DurationFormat.format(max))). Stop it now; it will be killed in "
-            + "\(DurationFormat.format(Defaults.walltimeGrace))"
+    public static func walltimeNotice(command: String, max: TimeInterval, grace: TimeInterval) -> String {
+        "compute gate: max runtime (\(DurationFormat.format(max))) of `\(shorten(command))` exceeded. "
+            + "Stop it now — the process will be killed in \(human(grace))"
     }
 
     /// Soft stop of one job by user (per-job ✕, first press).
     public static func jobStopNotice(command: String) -> String {
-        "compute gate: stop your heavy job `\(shorten(command))` now (requested by user); "
-            + "continue without it or stop and report"
+        "compute gate: user asks you to stop your heavy job `\(shorten(command))` now; it will not be "
+            + "killed automatically unless the user escalates. Continue without it or stop and report"
     }
 
     /// Soft stop by user (GATE-9).
     public static let softStopNotice =
-        "compute gate: user needs the machine. Stop your running heavy jobs now, start no new ones; "
-            + "continue without heavy runs or stop and report"
+        "compute gate: user needs the machine. Stop your running heavy jobs now and start no new ones; "
+            + "they will not be killed automatically unless the user escalates. "
+            + "Continue without heavy runs or stop and report"
 
     /// Hard stop by user (GATE-10).
     public static let hardStopNotice =
@@ -97,6 +98,12 @@ public enum CgateMessage {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "HH:mm"
         return f.string(from: date)
+    }
+
+    /// Human duration: `2 min` for whole minutes ≥ 2, else `90 s`.
+    public static func human(_ t: TimeInterval) -> String {
+        let s = max(0, Int(t.rounded()))
+        return s >= 120 && s % 60 == 0 ? "\(s / 60) min" : "\(s) s"
     }
 
     static func shorten(_ s: String, max: Int = 60) -> String {
