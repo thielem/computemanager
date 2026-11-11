@@ -1,17 +1,41 @@
 import AppKit
 import SwiftUI
 
-/// The menu bar UI is an `NSStatusItem` + `NSPopover` (`StatusItemController`), not a
-/// `MenuBarExtra`: its window-style panel clipped its rounded top/bottom edges when the content
-/// height changed. The `Settings` scene is never shown; it only gives SwiftUI a scene (and the
-/// standard Edit menu key equivalents for the Settings window's text fields).
+/// Plain AppKit entry, no SwiftUI `App`: the menu bar UI is an `NSStatusItem` + `NSPopover`
+/// (`StatusItemController`; a `MenuBarExtra` window clipped its rounded edges on resize), and a
+/// SwiftUI `App` without a `MenuBarExtra` needs some other scene, which SwiftUI opens at launch
+/// (an empty "Compute Manager Settings" window from a placeholder `Settings` scene).
 @main
-struct ComputeManagerApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+enum ComputeManagerMain {
+    @MainActor static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)
+        app.mainMenu = mainMenu()
+        withExtendedLifetime(delegate) { app.run() }
+    }
 
-    var body: some Scene {
-        Settings { EmptyView() }
-            .commands { CommandGroup(replacing: .appSettings) {} }
+    /// Never visible (accessory app), but provides ⌘Q and the standard Edit key equivalents
+    /// for the Settings window. ⌘, / ⌘Q in the popover come from `MenuContent`'s buttons.
+    private static func mainMenu() -> NSMenu {
+        let main = NSMenu()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Quit Compute Manager", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        for sub in [appMenu, edit] {
+            let item = NSMenuItem()
+            item.submenu = sub
+            main.addItem(item)
+        }
+        return main
     }
 }
 
