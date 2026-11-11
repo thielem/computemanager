@@ -78,15 +78,17 @@ private func waitUntil(_ timeout: TimeInterval = 5, _ cond: () -> Bool) async ->
         let reachable = Locked(true)
         link.onStatus = { s in reachable.set(s != nil) }
         link.start()
-        link.setMode(.max)
-        #expect(await waitUntil { first.requests.contains(.setMode(SetModeRequest(mode: .max))) })
+        let curve = FanCurve(lowTemp: 50, highTemp: 75, hysteresis: 2, tick: 2)
+        let want = FanRequest.setMode(SetModeRequest(mode: .max, curve: curve))
+        link.setMode(.max, curve: curve)
+        #expect(await waitUntil { first.requests.contains(want) })
         first.server.stop()
         #expect(await waitUntil { !reachable.get() })
 
         let second = FakeFand(path: path)
         try second.server.start()
         defer { second.server.stop() }
-        #expect(await waitUntil { second.requests.contains(.setMode(SetModeRequest(mode: .max))) })
+        #expect(await waitUntil { second.requests.contains(want) })  // mode + curve re-sent
         #expect(await waitUntil { second.requests.contains(.heartbeat) && reachable.get() })
         link.shutdown()
     }

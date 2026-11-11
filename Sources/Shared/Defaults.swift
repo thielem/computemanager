@@ -89,3 +89,21 @@ public struct FanCurve: Codable, Sendable, Equatable {
         self.tick = tick
     }
 }
+
+extension FanCurve {
+    /// Editable ranges (FAN-10), °C. `highTemp` must be ≥ `lowTemp + minSpan`.
+    public static let lowTempRange: ClosedRange<Double> = 40...80
+    public static let highTempMax: Double = 95
+    public static let minSpan: Double = 5
+    public static let hysteresisRange: ClosedRange<Double> = 0...10
+
+    /// Copy clamped to the editable ranges, with `tick` replaced (not user-editable).
+    /// nil if any value is not finite.
+    public func clamped(tick: TimeInterval) -> FanCurve? {
+        guard lowTemp.isFinite, highTemp.isFinite, hysteresis.isFinite else { return nil }
+        let lo = min(max(lowTemp, Self.lowTempRange.lowerBound), Self.lowTempRange.upperBound)
+        let hi = min(max(highTemp, lo + Self.minSpan), Self.highTempMax)
+        let hy = min(max(hysteresis, Self.hysteresisRange.lowerBound), Self.hysteresisRange.upperBound)
+        return FanCurve(lowTemp: lo, highTemp: hi, hysteresis: hy, tick: tick)
+    }
+}

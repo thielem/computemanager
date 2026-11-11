@@ -51,7 +51,9 @@ enum AppRuntime {
         let gate = GateViewModel(backend: service, initial: initial)
         gate.onPersist = { store.save($0) }
         let link = FanLink()
-        let fan = FanViewModel(link: link, socketPath: link.path)
+        let fanStore = FanStore.standard
+        let fan = FanViewModel(link: link, socketPath: link.path, curve: fanStore.load())
+        fan.onPersistCurve = { fanStore.save($0) }
         return AppModel(gate: gate, fan: fan)
     }()
 
@@ -85,6 +87,10 @@ enum AppRuntime {
         #if DEBUG
         if let out = ProcessInfo.processInfo.environment["COMPUTEMANAGER_SNAPSHOT"] {
             Snapshot.write(model: m, to: out)
+        }
+        // Same path as the gear button (the menu bar item can't be clicked from scripts).
+        if ProcessInfo.processInfo.environment["COMPUTEMANAGER_OPEN_SETTINGS"] != nil {
+            SettingsWindow.show(m)
         }
         #endif
     }

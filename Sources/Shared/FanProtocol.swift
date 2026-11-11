@@ -7,9 +7,14 @@ import Foundation
 // | op          | request body          | reply body                                   |
 // |-------------|-----------------------|----------------------------------------------|
 // | `status`    | —                     | `FanStatus`                                  |
-// | `setMode`   | `{"mode":"performance"}` | `FanStatus` (after applying)              |
+// | `setMode`   | `{"mode":"performance","curve":{…}?}` | `FanStatus` (after applying) |
 // | `heartbeat` | —                     | — (resets the watchdog, FAN-5)               |
 // | `subscribe` | —                     | stream of `FanStatus`, every `Defaults.fanSubscribeInterval`, same `id`, op `subscribe` |
+//
+// `setMode.curve` (optional, additive): performance curve. fand clamps it (`FanCurve.clamped`,
+// tick stays fand's), rejects non-finite values with `badRequest` (nothing changes), and keeps
+// it in memory only (Defaults after a fand restart). The app persists the curve and sends it
+// with every `setMode`. Older fands ignore the field.
 //
 // Auth: every connection's peer UID must equal the console user's UID, else the first request
 // is answered with `unauthorized` and the connection is closed (FAN-9). No raw SMC access
@@ -121,7 +126,12 @@ public struct FanStatus: Codable, Sendable, Equatable {
 
 public struct SetModeRequest: Codable, Sendable, Equatable {
     public var mode: FanMode
-    public init(mode: FanMode) { self.mode = mode }
+    /// Performance curve; nil = keep fand's current one.
+    public var curve: FanCurve?
+    public init(mode: FanMode, curve: FanCurve? = nil) {
+        self.mode = mode
+        self.curve = curve
+    }
 }
 
 /// Requests to fand.

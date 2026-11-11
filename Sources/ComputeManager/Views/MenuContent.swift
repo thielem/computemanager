@@ -19,9 +19,9 @@ struct MenuContent: View {
                 }
                 .help("Gate off (No more) + fans Auto")
                 Spacer()
-                SettingsLink { Image(systemName: "gearshape") }
+                Button { SettingsWindow.show(model) } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.borderless)
-                    .simultaneousGesture(TapGesture().onEnded { NSApp.activate(ignoringOtherApps: true) })
+                    .keyboardShortcut(",")
                     .help("Settings")
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .buttonStyle(.borderless)

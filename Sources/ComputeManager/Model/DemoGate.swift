@@ -76,9 +76,10 @@ final class DemoFan: FanControlling, @unchecked Sendable {  // guarded by `lock`
         cb?(s)
     }
 
-    func setMode(_ mode: FanMode) {
+    func setMode(_ mode: FanMode, curve: FanCurve?) {
         let (cb, s) = lock.withLock { () -> ((@Sendable (FanStatus?) -> Void)?, FanStatus?) in
             status?.mode = mode
+            if let curve { status?.curve = curve }
             return (_onStatus, status)
         }
         cb?(s)
