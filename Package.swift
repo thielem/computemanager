@@ -14,7 +14,7 @@ let package = Package(
         .target(name: "Shared"),
         // Gate state machine + gate socket server (hosted by the app).
         .target(name: "GateCore", dependencies: ["Shared"]),
-        // SwiftUI MenuBarExtra app.
+        // SwiftUI menu bar app (NSStatusItem + NSPopover).
         .executableTarget(name: "ComputeManager", dependencies: ["Shared", "GateCore"]),
         // Root LaunchDaemon talking to the SMC.
         .executableTarget(name: "fand", dependencies: ["Shared"]),

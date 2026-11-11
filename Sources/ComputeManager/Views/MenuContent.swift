@@ -32,9 +32,5 @@ struct MenuContent: View {
         }
         .padding(14)
         .frame(width: 320)
-        // Report the ideal height so the panel resizes with the content (job rows, stop choice)
-        // instead of clipping it, which cut off the panel's rounded edges and border.
-        .fixedSize(horizontal: false, vertical: true)
-        .onDisappear { model.gate.cancelOffChoice() }
     }
 }
