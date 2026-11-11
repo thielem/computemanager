@@ -90,6 +90,8 @@ public struct Lease: Codable, Sendable, Equatable, Identifiable {
     public var state: LeaseState
     public var stopRequestedAt: Date?
     public var stopReason: StopReason?
+    /// Claude Code subagent that started the job (hook `agent_id`); nil = main session/unknown.
+    public var agentId: String?
 
     public var id: UUID { jobId }
     /// Project name = last path component of cwd.
@@ -100,7 +102,7 @@ public struct Lease: Codable, Sendable, Equatable, Identifiable {
     public init(jobId: UUID = UUID(), sessionId: String, cwd: String, command: String,
                 pid: Int32, pgid: Int32?, startedAt: Date, maxRuntimeSeconds: TimeInterval,
                 autoWrapped: Bool, messagingSocket: String? = nil, state: LeaseState = .running,
-                stopRequestedAt: Date? = nil, stopReason: StopReason? = nil) {
+                stopRequestedAt: Date? = nil, stopReason: StopReason? = nil, agentId: String? = nil) {
         self.jobId = jobId
         self.sessionId = sessionId
         self.cwd = cwd
@@ -114,6 +116,7 @@ public struct Lease: Codable, Sendable, Equatable, Identifiable {
         self.state = state
         self.stopRequestedAt = stopRequestedAt
         self.stopReason = stopReason
+        self.agentId = agentId
     }
 }
 
@@ -122,15 +125,18 @@ public struct Ticket: Codable, Sendable, Equatable, Identifiable {
     /// Short human-typable id, e.g. `t7` (GateCore chooses the format).
     public var id: String
     public var sessionId: String
-    /// Tickets are keyed per (sessionId, cwd).
+    /// Tickets are keyed per (sessionId, agentId, cwd).
     public var cwd: String
     public var issuedAt: Date
+    /// Subagent owning the ticket; nil = main session/unknown.
+    public var agentId: String?
 
-    public init(id: String, sessionId: String, cwd: String, issuedAt: Date) {
+    public init(id: String, sessionId: String, cwd: String, issuedAt: Date, agentId: String? = nil) {
         self.id = id
         self.sessionId = sessionId
         self.cwd = cwd
         self.issuedAt = issuedAt
+        self.agentId = agentId
     }
 }
 

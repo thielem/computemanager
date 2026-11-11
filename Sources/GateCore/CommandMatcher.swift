@@ -46,6 +46,13 @@ enum CommandMatcher {
         return layers(segs[0]).contains { basename($0[0]) == "cgate" }
     }
 
+    /// True if some segment is a `cgate <sub>` invocation (any path, after prefixes).
+    static func invokesCgate(_ command: String, _ sub: String) -> Bool {
+        segments(command).contains { seg in
+            layers(seg).contains { $0.count > 1 && basename($0[0]) == "cgate" && $0[1] == sub }
+        }
+    }
+
     /// True if `ticket` appears as a whole word (or `--ticket=<id>`) in a cgate segment.
     static func mentionsTicket(_ command: String, _ ticket: String) -> Bool {
         segments(command).contains { seg in

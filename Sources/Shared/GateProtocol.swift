@@ -132,12 +132,16 @@ public struct HookCheckRequest: Codable, Sendable, Equatable {
     /// `tool_input.command` for Bash; nil otherwise.
     public var command: String?
     public var cwd: String?
+    /// Hook `agent_id` (present when a subagent makes the call); nil = main session.
+    public var agentId: String?
 
-    public init(sessionId: String, toolName: String, command: String? = nil, cwd: String? = nil) {
+    public init(sessionId: String, toolName: String, command: String? = nil, cwd: String? = nil,
+                agentId: String? = nil) {
         self.sessionId = sessionId
         self.toolName = toolName
         self.command = command
         self.cwd = cwd
+        self.agentId = agentId
     }
 }
 

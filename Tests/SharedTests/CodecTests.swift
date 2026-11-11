@@ -83,6 +83,12 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(s.ticketHoldSeconds == Defaults.ticketHold && s.walltimeGraceSeconds == Defaults.walltimeGrace)
         let t = try JSONDecoder().decode(TicketInfo.self, from: Data(#"{"id":"t1","position":1}"#.utf8))
         #expect(t.holdSeconds == nil)
+        let h = try JSONDecoder().decode(HookCheckRequest.self,
+                                         from: Data(#"{"sessionId":"s","toolName":"Bash","command":"ls"}"#.utf8))
+        #expect(h.agentId == nil)
+        let l = try JSONDecoder().decode(Ticket.self,
+                                         from: Data(#"{"id":"t1","sessionId":"s","cwd":"/p","issuedAt":0}"#.utf8))
+        #expect(l.agentId == nil)
     }
 
     @Test func gateRepliesRoundTrip() throws {
@@ -168,7 +174,7 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         c.year = 2026; c.month = 1; c.day = 2; c.hour = 9; c.minute = 5
         let d = Calendar.current.date(from: c)!
         #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 2, eta: d)) ==
-            "compute busy: ticket t3, position 2, next slot ~09:05, then held for you 2 min. Run in background: cgate wait --ticket t3; do other work meanwhile")
+            "compute busy: ticket t3, position 2, next slot ~09:05, then held for you 2 min. Start `cgate wait --ticket t3` in the background now; you'll be notified when it completes. Don't rely on any other message; do other work meanwhile")
         #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 2, eta: d, holdSeconds: 90)).contains("held for you 90 s."))
         #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 1, eta: nil)).contains("next slot ~?, then held for you 2 min."))
         #expect(CgateMessage.walltimeKilled(max: 900) == "killed: exceeded declared max runtime (15m)")

@@ -549,3 +549,66 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
         }
     }
 }
+
+@Suite struct AgentTests {
+    func run(_ cmd: String, agent: String?, session: String = "s", cwd: String = "/p/a") -> HookCheckRequest {
+        HookCheckRequest(sessionId: session, toolName: "Bash", command: cmd, cwd: cwd, agentId: agent)
+    }
+
+    func acq(_ cmd: String, session: String = "s", cwd: String = "/p/a", ticket: String? = nil) -> AcquireRequest {
+        AcquireRequest(sessionId: session, cwd: cwd, command: cmd, pid: 1, ticket: ticket,
+                       messagingSocket: "/tmp/cc-socks/s.sock")
+    }
+
+    @Test func matchNoMatchExpiry() throws {
+        let m = machine(slots: 4)
+        #expect(m.hookCheck(run("cgate run --max 5m -- 'swift test'", agent: "A"), now: t0) == .allow)
+        _ = m.acquire(acq("make"), now: t0)  // different command: main session
+        _ = m.acquire(acq("swift test"), now: t0 + 1)
+        #expect(m.leases.map(\.agentId) == [nil, "A"])
+        #expect(m.pendingAgents.isEmpty)  // consumed
+        _ = m.hookCheck(run("cgate run -- swift build", agent: "B"), now: t0)
+        _ = m.acquire(acq("swift build"), now: t0 + 16)  // expired
+        #expect(m.leases.last?.agentId == nil)
+        _ = m.hookCheck(run("cgate run -- ls", agent: nil), now: t0 + 20)  // main session: nothing stashed
+        _ = m.hookCheck(run("cgate wait --ticket t1", agent: "C"), now: t0 + 20)  // only `run` attributes
+        #expect(m.pendingAgents.isEmpty)
+    }
+
+    @Test func twoSubagentsSameSession() throws {
+        let m = machine(slots: 4)
+        _ = m.hookCheck(run("cgate run -- 'make'", agent: "A", cwd: "/p/a"), now: t0)
+        _ = m.hookCheck(run("cd /p/b && cgate run -- 'make'", agent: "B", cwd: "/p/b"), now: t0)
+        _ = m.acquire(acq("make", cwd: "/p/b"), now: t0)
+        _ = m.acquire(acq("make", cwd: "/p/a"), now: t0)
+        #expect(m.leases.map(\.agentId) == ["B", "A"])
+    }
+
+    @Test func ticketsAndNoticesPerAgentNoPush() throws {
+        let m = machine(slots: 1)
+        let main = try #require(granted(m.acquire(acq("make"), now: t0)))
+        _ = m.hookCheck(run("cgate run -- 'make'", agent: "A"), now: t0)
+        let ta = try #require(busy(m.acquire(acq("make"), now: t0)))
+        let tm = try #require(busy(m.acquire(acq("make"), now: t0)))  // main: own ticket, not A's
+        #expect(ta.id == "t1" && tm.id == "t2" && m.tickets.map(\.agentId) == ["A", nil])
+        m.outbox = []
+        m.release(main, now: t0)
+        #expect(m.notices.map(\.agentId) == ["A"] && m.outbox.isEmpty)  // no push into the parent
+        #expect(m.hookCheck(run("ls", agent: nil), now: t0) == .allow)
+        #expect(m.hookCheck(run("ls", agent: "B"), now: t0) == .allow)
+        guard case .notice = m.hookCheck(run("ls", agent: "A"), now: t0) else { Issue.record("no notice"); return }
+        // A claims with its ticket (no hook attribution needed); stop notices also go to A only.
+        let a = try #require(granted(m.acquire(acq("make", ticket: "t1"), now: t0 + 1)))
+        #expect(m.leases.first?.agentId == "A")
+        #expect(m.killJob(a, soft: true, now: t0 + 1))
+        #expect(m.notices.map(\.agentId) == ["A"] && m.outbox.isEmpty)
+    }
+
+    @Test func oldClientsWithoutAgentUnchanged() throws {
+        let m = machine(slots: 1)
+        _ = m.acquire(acq("make"), now: t0)
+        m.setGate(.softStop, slots: nil, now: t0)
+        #expect(m.outbox.count == 1 && m.notices.first?.agentId == nil)
+        #expect(m.hookCheck(run("ls", agent: nil), now: t0) == .notice(text: CgateMessage.softStopNotice))
+    }
+}

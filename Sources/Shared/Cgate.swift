@@ -42,7 +42,8 @@ public enum CgateMessage {
     public static func busy(_ t: TicketInfo) -> String {
         "compute busy: ticket \(t.id), position \(t.position), next slot ~\(clock(t.eta)), "
             + "then held for you \(human(t.holdSeconds ?? Defaults.ticketHold)). "
-            + "Run in background: cgate wait --ticket \(t.id); do other work meanwhile"
+            + "Start `cgate wait --ticket \(t.id)` in the background now; you'll be notified when it "
+            + "completes. Don't rely on any other message; do other work meanwhile"
     }
 
     /// Exit 77.

@@ -3,7 +3,7 @@ import Shared
 
 /// `cgate hook`: Claude Code PreToolUse hook (AGENT-2/3/5/7).
 ///
-/// stdin: hook JSON (`session_id`, `cwd`, `tool_name`, `tool_input`). Asks the gate
+/// stdin: hook JSON (`session_id`, `cwd`, `tool_name`, `tool_input`, `agent_id` for subagents). Asks the gate
 /// (`hookCheck`, overall ≤ `Defaults.hookClientTimeout`) and maps the decision:
 /// - `deny`   → deny with the reason (heavy command not run via cgate: the exact
 ///              `cgate run --max <estimate> -- '<cmd>'` line to use instead)
@@ -20,7 +20,8 @@ enum Hook {
             sessionId: (input["session_id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "unknown",
             toolName: tool,
             command: toolInput["command"] as? String,
-            cwd: input["cwd"] as? String)
+            cwd: input["cwd"] as? String,
+            agentId: (input["agent_id"] as? String).flatMap { $0.isEmpty ? nil : $0 })
         guard case .hookCheck(let decision)? = try? link.call(.hookCheck(req), timeout: timeout) else { return nil }
         return render(decision)
     }

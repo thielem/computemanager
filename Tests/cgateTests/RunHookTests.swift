@@ -302,6 +302,28 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         #expect(await offPool { Hook.output(stdin: stdin, link: link) } == nil)
     }
 
+    @Test func subagentRunAttributedAndNoticeRouted() async throws {
+        let h = try Harness(slots: 1)
+        var run = input
+        run["agent_id"] = "agent-abc123"
+        run["tool_input"] = ["command": "cgate run --max 5m -- 'make all'"]
+        let link = h.link
+        let runIn = try JSONSerialization.data(withJSONObject: run)
+        #expect(await offPool { Hook.output(stdin: runIn, link: link) } == nil)
+        _ = await h.svc.handle(.acquire(AcquireRequest(sessionId: "sess", cwd: "/tmp/proj", command: "make all", pid: 1)))
+        #expect(await h.status().leases.first?.agentId == "agent-abc123")
+        _ = await h.svc.handle(.setGate(SetGateRequest(level: .softStop)))
+        var edit = input
+        edit["tool_name"] = "Edit"
+        edit["tool_input"] = ["file_path": "/x"]
+        let mainIn = try JSONSerialization.data(withJSONObject: edit)
+        #expect(await offPool { Hook.output(stdin: mainIn, link: link) } == nil)  // parent: nothing
+        edit["agent_id"] = "agent-abc123"
+        let subIn = try JSONSerialization.data(withJSONObject: edit)
+        let out = try json(await offPool { Hook.output(stdin: subIn, link: link) })
+        #expect(out["permissionDecisionReason"] as? String == CgateMessage.softStopNotice)
+    }
+
     /// App unreachable → no output even for a heavy unwrapped command (exit 0 in main).
     @Test func failOpen() async throws {
         let link = GateLink(path: "/tmp/cm-test-nonexistent-\(getpid()).sock")

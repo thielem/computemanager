@@ -11,7 +11,8 @@ struct JobRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(lease.project).fontWeight(.medium).lineLimit(1)
-                    Text(String(lease.sessionId.prefix(6))).foregroundStyle(.tertiary)
+                    Text(String(lease.sessionId.prefix(6)) + (lease.agentId.map { "/" + $0.suffix(6) } ?? ""))
+                        .foregroundStyle(.tertiary)
                 }
                 Text(lease.command)
                     .font(.caption).foregroundStyle(.secondary)

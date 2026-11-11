@@ -11,6 +11,19 @@ struct Notice: Sendable, Equatable {
     var sessionId: String
     var text: String
     var kind: Kind
+    /// Subagent the notice is for; nil = main session. Delivered only to matching hook calls.
+    var agentId: String? = nil
+}
+
+/// A subagent's `cgate run` seen by the hook, waiting for the matching `acquire` (which carries
+/// no agent info): matched by session + hook command line containing the acquired command,
+/// same cwd preferred; oldest first; consumed on match.
+struct PendingAgent: Sendable, Equatable {
+    var sessionId: String
+    var cwd: String?
+    var command: String
+    var agentId: String
+    var until: Date
 }
 
 /// Messaging-socket push requested by the machine; performed by `GateService` outside its lock.
@@ -27,6 +40,8 @@ struct GateMachine: Sendable {
     static let unknownSession = "unknown"
     /// A lease without heartbeat for this long is reaped (cgate hung or gone).
     static let heartbeatTimeout: TimeInterval = 30
+    /// How long a hook-seen subagent `cgate run` waits for its `acquire`.
+    static let attributionWindow: TimeInterval = 15
     /// A `cgate wait` counts as waiting this long after its poll ends (reconnect gap).
     static let waiterLinger: TimeInterval = 1
 
@@ -48,6 +63,7 @@ struct GateMachine: Sendable {
     var sessionSockets: [String: String] = [:]
     /// Pushes produced since the last drain.
     var outbox: [Push] = []
+    var pendingAgents: [PendingAgent] = []
     var nextTicket = 1
 
     init(settings: GateSettings, level: GateLevel) {
@@ -110,7 +126,7 @@ struct GateMachine: Sendable {
                 leases[i].stopRequestedAt = now
                 notify(l.sessionId, CgateMessage.walltimeNotice(command: l.command, max: l.maxRuntimeSeconds,
                                                                 grace: settings.walltimeGraceSeconds),
-                       socket: l.messagingSocket)
+                       agent: l.agentId, socket: l.messagingSocket)
             }
             if now >= l.deadline.addingTimeInterval(settings.walltimeGraceSeconds) {
                 leases[i].state = .killing
@@ -122,6 +138,7 @@ struct GateMachine: Sendable {
     /// Expire unclaimed holds; hold one free slot per queued ticket, oldest first.
     mutating func promote(now: Date) {
         for h in held where now >= h.until { drop(ticket: h.ticketId) }
+        pendingAgents.removeAll { now >= $0.until }
         waitLinger = waitLinger.filter { $0.value > now }
         if level.isOff { held = [] }  // tickets keep their place
         while freeSlots > 0, let next = queuedTickets.first {
@@ -129,7 +146,7 @@ struct GateMachine: Sendable {
             held.append(HeldSlot(ticketId: next.id, until: until))
             if !isWaited(next.id, now: now) {
                 notify(next.sessionId, CgateMessage.slotReady(ticket: next.id, heldUntil: until, now: now),
-                       kind: .slotReady(ticket: next.id), socket: next.socket(in: self))
+                       kind: .slotReady(ticket: next.id), agent: next.agentId, socket: next.socket(in: self))
             }
         }
     }
@@ -169,20 +186,22 @@ struct GateMachine: Sendable {
             return .granted(jobId: re.jobId, maxRuntimeSeconds: max)
         }
         guard !level.isOff else { return .off(message: CgateMessage.gateOff) }
+        var agent = claimAgent(r, now: now)
 
         if let t = r.ticket {
+            agent = agent ?? tickets.first { $0.id == t }?.agentId
             if hold(of: t) != nil || (queuedTickets.first?.id == t && freeSlots > 0) {
-                return grant(r, consuming: t, now: now)
+                return grant(r, agent: agent, consuming: t, now: now)
             }
             if let info = ticketInfo(t, now: now) { return .busy(info) }
             return .ticketExpired(ticket: t)
         }
-        if let own = ownTicket(session: r.sessionId, cwd: r.cwd) {
-            if hold(of: own.id) != nil { return grant(r, consuming: own.id, now: now) }
+        if let own = ownTicket(session: r.sessionId, agent: agent, cwd: r.cwd) {
+            if hold(of: own.id) != nil { return grant(r, agent: agent, consuming: own.id, now: now) }
             return .busy(ticketInfo(own.id, now: now)!)
         }
-        if queuedTickets.isEmpty, freeSlots > 0 { return grant(r, consuming: nil, now: now) }
-        return .busy(issueTicket(session: r.sessionId, cwd: r.cwd, now: now))
+        if queuedTickets.isEmpty, freeSlots > 0 { return grant(r, agent: agent, consuming: nil, now: now) }
+        return .busy(issueTicket(session: r.sessionId, agent: agent, cwd: r.cwd, now: now))
     }
 
     mutating func release(_ jobId: UUID, now: Date) {
@@ -205,6 +224,10 @@ struct GateMachine: Sendable {
 
     mutating func hookCheck(_ r: HookCheckRequest, now: Date) -> HookDecision {
         advance(now: now)
+        if let a = r.agentId, r.toolName == "Bash", let cmd = r.command, CommandMatcher.invokesCgate(cmd, "run") {
+            pendingAgents.append(PendingAgent(sessionId: r.sessionId, cwd: r.cwd, command: cmd, agentId: a,
+                                              until: now.addingTimeInterval(Self.attributionWindow)))
+        }
         if let cmd = r.command {
             // Claiming / waiting for a ticket makes its slot-ready notice redundant.
             notices.removeAll {
@@ -212,9 +235,10 @@ struct GateMachine: Sendable {
                 return CommandMatcher.mentionsTicket(cmd, t)
             }
         }
-        let mine = notices.filter { $0.sessionId == r.sessionId }
+        let isMine = { (n: Notice) in n.sessionId == r.sessionId && n.agentId == r.agentId }
+        let mine = notices.filter(isMine)
         if !mine.isEmpty {
-            notices.removeAll { $0.sessionId == r.sessionId }
+            notices.removeAll(where: isMine)
             return .notice(text: mine.map(\.text).joined(separator: "\n"))
         }
         // K1 (user decision): never rewrite, never allow; heavy unwrapped Bash → deny with the
@@ -266,13 +290,14 @@ struct GateMachine: Sendable {
                 leases[i].stopReason = .userKill
                 leases[i].stopRequestedAt = now
                 notify(leases[i].sessionId, CgateMessage.jobStopNotice(command: leases[i].command),
-                       socket: leases[i].messagingSocket)
+                       agent: leases[i].agentId, socket: leases[i].messagingSocket)
             }
         } else if leases[i].state != .killing {
             leases[i].state = .killing
             leases[i].stopReason = .userKill
             leases[i].stopRequestedAt = now
-            notify(leases[i].sessionId, Self.killNotice(leases[i].command), socket: leases[i].messagingSocket)
+            notify(leases[i].sessionId, Self.killNotice(leases[i].command), agent: leases[i].agentId,
+                   socket: leases[i].messagingSocket)
         }
         return true
     }
@@ -317,42 +342,59 @@ struct GateMachine: Sendable {
             guard leases[i].state == .running else { return }
             leases[i].state = .stopRequested
             leases[i].stopReason = .userSoftStop
-            notify(leases[i].sessionId, CgateMessage.softStopNotice, socket: leases[i].messagingSocket)
+            notify(leases[i].sessionId, CgateMessage.softStopNotice, agent: leases[i].agentId,
+                   socket: leases[i].messagingSocket)
         case .hardStop:
             guard leases[i].state != .killing else { return }
             leases[i].state = .killing
             leases[i].stopReason = .userHardStop
-            notify(leases[i].sessionId, CgateMessage.hardStopNotice, socket: leases[i].messagingSocket)
+            notify(leases[i].sessionId, CgateMessage.hardStopNotice, agent: leases[i].agentId,
+                   socket: leases[i].messagingSocket)
         }
     }
 
-    /// Queue a notice (deduplicated per session + text) and a push.
-    private mutating func notify(_ session: String, _ text: String, kind: Notice.Kind = .stop, socket: String?) {
-        let n = Notice(sessionId: session, text: text, kind: kind)
+    /// Queue a notice (deduplicated per session + agent + text) and a push. Subagent notices are
+    /// never pushed: the session's messaging socket would deliver them to the parent.
+    private mutating func notify(_ session: String, _ text: String, kind: Notice.Kind = .stop,
+                                 agent: String?, socket: String?) {
+        let n = Notice(sessionId: session, text: text, kind: kind, agentId: agent)
         guard !notices.contains(n) else { return }
         if session != Self.unknownSession { notices.append(n) }
+        guard agent == nil else { return }
         let sock = socket ?? sessionSockets[session]
         if session != Self.unknownSession || sock != nil {
             outbox.append(Push(sessionId: session, socket: sock, text: text))
         }
     }
 
-    private func ownTicket(session: String, cwd: String) -> Ticket? {
+    private func ownTicket(session: String, agent: String?, cwd: String) -> Ticket? {
         guard session != Self.unknownSession else { return nil }
-        return tickets.first { $0.sessionId == session && $0.cwd == cwd }
+        return tickets.first { $0.sessionId == session && $0.agentId == agent && $0.cwd == cwd }
     }
 
-    private mutating func issueTicket(session: String, cwd: String, now: Date) -> TicketInfo {
-        let t = Ticket(id: "t\(nextTicket)", sessionId: session, cwd: cwd, issuedAt: now)
+    /// Consume the subagent attribution for this acquire (see `PendingAgent`); nil = main session.
+    private mutating func claimAgent(_ r: AcquireRequest, now: Date) -> String? {
+        let cands = pendingAgents.indices.filter {
+            let p = pendingAgents[$0]
+            return p.sessionId == r.sessionId && now < p.until && !r.command.isEmpty && p.command.contains(r.command)
+        }
+        guard let i = cands.first(where: { pendingAgents[$0].cwd == r.cwd }) ?? cands.first else { return nil }
+        return pendingAgents.remove(at: i).agentId
+    }
+
+    private mutating func issueTicket(session: String, agent: String?, cwd: String, now: Date) -> TicketInfo {
+        let t = Ticket(id: "t\(nextTicket)", sessionId: session, cwd: cwd, issuedAt: now, agentId: agent)
         nextTicket += 1
         tickets.append(t)
         return ticketInfo(t.id, now: now)!
     }
 
-    private mutating func grant(_ r: AcquireRequest, consuming ticket: String?, now: Date) -> AcquireResult {
+    private mutating func grant(_ r: AcquireRequest, agent: String?, consuming ticket: String?,
+                                now: Date) -> AcquireResult {
         if let ticket { drop(ticket: ticket) }
         let max = effectiveMax(r.maxRuntimeSeconds)
-        let lease = makeLease(r, id: UUID(), start: now, max: max)
+        var lease = makeLease(r, id: UUID(), start: now, max: max)
+        lease.agentId = agent
         leases.append(lease)
         lastSeen[lease.jobId] = now
         promote(now: now)
