@@ -37,7 +37,7 @@ struct GateSection: View {
                     VStack(spacing: 8) {
                         ForEach(gate.runningJobs) { lease in
                             JobRow(lease: lease, now: ctx.date) {
-                                Task { await gate.kill(lease.jobId) }
+                                Task { await gate.stop(lease.jobId) }
                             }
                         }
                     }

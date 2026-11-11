@@ -253,11 +253,20 @@ struct GateMachine: Sendable {
         if level == .on { setGate(.noMore, slots: nil, now: now) } else { advance(now: now) }
     }
 
-    /// False if the job is unknown.
-    mutating func killJob(_ jobId: UUID, now: Date) -> Bool {
+    /// False if the job is unknown. `soft`: only a running job becomes `stopRequested` (notice, no
+    /// signal); a job already stop-requested or killing is left as is.
+    mutating func killJob(_ jobId: UUID, soft: Bool = false, now: Date) -> Bool {
         advance(now: now)
         guard let i = leases.firstIndex(where: { $0.jobId == jobId }) else { return false }
-        if leases[i].state != .killing {
+        if soft {
+            if leases[i].state == .running {
+                leases[i].state = .stopRequested
+                leases[i].stopReason = .userKill
+                leases[i].stopRequestedAt = now
+                notify(leases[i].sessionId, CgateMessage.jobStopNotice(command: leases[i].command),
+                       socket: leases[i].messagingSocket)
+            }
+        } else if leases[i].state != .killing {
             leases[i].state = .killing
             leases[i].stopReason = .userKill
             leases[i].stopRequestedAt = now

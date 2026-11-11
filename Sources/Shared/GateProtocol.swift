@@ -14,7 +14,7 @@ import Foundation
 // | `status`     | cgate status, UI | —                 | `GateStatus`                       |
 // | `setGate`    | UI / debug  | `SetGateRequest`       | `GateStatus`                       |
 // | `meeting`    | UI / debug  | —                      | `GateStatus` (gate → noMore; the APP also sets fans → auto via fand) |
-// | `killJob`    | UI / debug  | `KillJobRequest`       | `GateStatus` (hard stop for one job: notice + kill; reason userKill, exit 78; unknown job → invalidState) |
+// | `killJob`    | UI / debug  | `KillJobRequest`       | `GateStatus` (hard stop for one job: notice + kill; reason userKill, exit 78; `soft: true` → notice only, lease stopRequested/userKill, process untouched; unknown job → invalidState) |
 // | `setSettings`| UI / debug  | `GateSettings`         | `GateStatus` (slots, default/cap max runtime, auto-wrap patterns) |
 //
 // The app hosts GateCore in-process; the UI calls the same ops in-process through
@@ -159,7 +159,12 @@ public struct SetGateRequest: Codable, Sendable, Equatable {
 
 public struct KillJobRequest: Codable, Sendable, Equatable {
     public var jobId: UUID
-    public init(jobId: UUID) { self.jobId = jobId }
+    /// true → soft stop of this job only (notice, no signal). nil/false → hard kill (old behaviour).
+    public var soft: Bool?
+    public init(jobId: UUID, soft: Bool? = nil) {
+        self.jobId = jobId
+        self.soft = soft
+    }
 }
 
 public enum GateRequest: OpMessage {

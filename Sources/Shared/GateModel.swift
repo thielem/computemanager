@@ -62,7 +62,7 @@ public enum StopReason: String, Codable, Sendable {
     case userSoftStop
     /// Gate hard stop by user (exit 78).
     case userHardStop
-    /// Per-job kill from the UI (exit 78).
+    /// Per-job stop from the UI: soft (`stopRequested`, notice only) or kill (exit 78).
     case userKill
 }
 

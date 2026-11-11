@@ -62,7 +62,11 @@ final class GateViewModel {
         await send(.setGate(SetGateRequest(level: status.level, slots: max(1, n))))
     }
 
-    func kill(_ jobId: UUID) async { await send(.killJob(KillJobRequest(jobId: jobId))) }
+    /// Per-job ✕: a running job is asked to stop (soft); a stop-requested one is killed.
+    func stop(_ jobId: UUID) async {
+        let soft = status.leases.first { $0.jobId == jobId }?.state == .running
+        await send(.killJob(KillJobRequest(jobId: jobId, soft: soft ? true : nil)))
+    }
 
     func meeting() async {
         offChoicePending = false

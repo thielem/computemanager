@@ -4,7 +4,7 @@ import SwiftUI
 struct JobRow: View {
     let lease: Lease
     let now: Date
-    let kill: () -> Void
+    let stop: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -22,13 +22,13 @@ struct JobRow: View {
             Text(Self.elapsed(from: lease.startedAt, to: now) + " / " + Self.minutes(lease.maxRuntimeSeconds))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(tint)
-            Button(action: kill) {
+            Button(action: stop) {
                 Image(systemName: "xmark.circle.fill")
             }
             .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(lease.state == .stopRequested ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
             .disabled(lease.state == .killing)
-            .help("Kill")
+            .help(lease.state == .running ? "Ask to stop" : "Kill")
         }
     }
 

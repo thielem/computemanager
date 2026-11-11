@@ -34,7 +34,7 @@ final class MBox {
     func heartbeat(_ r: JobHeartbeatRequest, now: Date) -> HeartbeatDirective { m.heartbeat(r, now: now) }
     func hookCheck(_ r: HookCheckRequest, now: Date) -> HookDecision { m.hookCheck(r, now: now) }
     func waitStatus(_ id: String, now: Date) -> WaitTicketResult { m.waitStatus(id, now: now) }
-    func killJob(_ id: UUID, now: Date) -> Bool { m.killJob(id, now: now) }
+    func killJob(_ id: UUID, soft: Bool = false, now: Date) -> Bool { m.killJob(id, soft: soft, now: now) }
     func release(_ id: UUID, now: Date) { m.release(id, now: now) }
     func advance(now: Date) { m.advance(now: now) }
     @discardableResult func reap(dead: Set<Int32>, stopped: Set<Int32> = [], now: Date) -> [Lease] {
@@ -319,6 +319,40 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
         #expect(!m.killJob(UUID(), now: t0))
         #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0) == .hardStop(reason: .userKill))
         #expect(m.notices.count == 1)
+    }
+
+    @Test func softKillJobThenHard() throws {
+        let m = machine()
+        let a = try #require(granted(m.acquire(req("a"), now: t0)))
+        let b = try #require(granted(m.acquire(req("b"), now: t0)))
+        #expect(m.killJob(a, soft: true, now: t0))
+        #expect(!m.killJob(UUID(), soft: true, now: t0))
+        #expect(m.leases[0].state == .stopRequested && m.leases[0].stopReason == .userKill)
+        #expect(m.leases[1].state == .running)
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0) == .softStop(reason: .userKill))
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: b), now: t0) == .continue)
+        #expect(m.notices.map(\.text) == [CgateMessage.jobStopNotice(command: "make")])
+        #expect(m.outbox.map(\.text) == [CgateMessage.jobStopNotice(command: "make")])
+        #expect(m.killJob(a, soft: true, now: t0 + 1))  // repeat soft: no-op
+        #expect(m.notices.count == 1 && m.leases[0].stopRequestedAt == t0)
+        m.setGate(.on, slots: nil, now: t0 + 2)  // per-job stop survives gate back on
+        #expect(m.leases[0].state == .stopRequested)
+        #expect(m.killJob(a, now: t0 + 3))
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 3) == .hardStop(reason: .userKill))
+    }
+
+    @Test func gateSoftStopAndWalltimeMarkStopRequested() throws {
+        let m = machine()
+        let a = try #require(granted(m.acquire(req("a"), now: t0)))
+        let b = try #require(granted(m.acquire(req("b", max: 60), now: t0)))
+        m.setGate(.softStop, slots: nil, now: t0)
+        #expect(m.leases.allSatisfy { $0.state == .stopRequested })
+        #expect(m.killJob(a, soft: true, now: t0))  // already requested: no extra notice
+        #expect(!m.notices.contains { $0.text == CgateMessage.jobStopNotice(command: "make") })
+        m.setGate(.on, slots: nil, now: t0)
+        m.advance(now: t0 + 60)
+        #expect(m.leases.first { $0.jobId == b }?.state == .stopRequested)
+        #expect(m.leases.first { $0.jobId == a }?.state == .running)
     }
 
     @Test func settingsSanitized() {

@@ -52,6 +52,7 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
             .setGate(SetGateRequest(level: .hardStop)),
             .meeting,
             .killJob(KillJobRequest(jobId: UUID())),
+            .killJob(KillJobRequest(jobId: UUID(), soft: true)),
             .setSettings(GateSettings(slots: 3, patterns: ["make"], defaultMaxRuntimeSeconds: 60,
                                       maxRuntimeCapSeconds: 120)),
             .acquire(AcquireRequest(sessionId: "s", cwd: "/p", command: "make", pid: 10, pgid: 11,
@@ -62,6 +63,16 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
             let r = Request(id: "x", m)
             #expect(try roundTrip(r) == r)
         }
+    }
+
+    @Test func killJobSoftBackwardCompatible() throws {
+        let id = UUID()
+        let old = try JSONDecoder().decode(KillJobRequest.self, from: Data(#"{"jobId":"\#(id.uuidString)"}"#.utf8))
+        #expect(old == KillJobRequest(jobId: id) && old.soft == nil)
+        let hard = try String(decoding: JSONEncoder().encode(KillJobRequest(jobId: id)), as: UTF8.self)
+        #expect(!hard.contains("soft"))  // old peers see the exact old body
+        let soft = try JSONDecoder().decode(KillJobRequest.self, from: JSONEncoder().encode(KillJobRequest(jobId: id, soft: true)))
+        #expect(soft.soft == true)
     }
 
     @Test func gateRepliesRoundTrip() throws {

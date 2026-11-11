@@ -72,6 +72,12 @@ public enum CgateMessage {
             + "\(DurationFormat.format(Defaults.walltimeGrace))"
     }
 
+    /// Soft stop of one job by user (per-job ✕, first press).
+    public static func jobStopNotice(command: String) -> String {
+        "compute gate: stop your heavy job `\(shorten(command))` now (requested by user); "
+            + "continue without it or stop and report"
+    }
+
     /// Soft stop by user (GATE-9).
     public static let softStopNotice =
         "compute gate: user needs the machine. Stop your running heavy jobs now, start no new ones; "

@@ -66,17 +66,31 @@ import Testing
         let vm = make(fake)
         var saved: [GateStore.Snapshot] = []
         vm.onPersist = { saved.append($0) }
-        await vm.kill(l.jobId)
+        await vm.stop(l.jobId)
+        #expect(vm.status.leases.first?.state == .stopRequested)
+        await vm.stop(l.jobId)
         #expect(vm.status.leases.first?.state == .killing)
+        #expect(fake.requests == [.killJob(KillJobRequest(jobId: l.jobId, soft: true)),
+                                  .killJob(KillJobRequest(jobId: l.jobId))])
         #expect(saved.isEmpty)
         await vm.setOn(false)
         await vm.chooseOff(.noMore)
         #expect(saved.last?.level == .noMore)
     }
 
+    @Test func stopOnStopRequestedJobKills() async {
+        var l = lease()
+        l.state = .stopRequested  // e.g. gate soft stop or walltime notice
+        let fake = FakeGate(leases: [l])
+        let vm = make(fake)
+        await vm.stop(l.jobId)
+        #expect(fake.requests == [.killJob(KillJobRequest(jobId: l.jobId))])
+        #expect(vm.status.leases.first?.state == .killing)
+    }
+
     @Test func errorsSurface() async {
         let vm = make(FakeGate())
-        await vm.kill(UUID())
+        await vm.stop(UUID())
         #expect(vm.lastError == "unknown job")
     }
 

@@ -35,7 +35,7 @@ final class FakeGate: GateBackend, @unchecked Sendable {  // guarded by `lock`
                 guard let i = status.leases.firstIndex(where: { $0.jobId == k.jobId }) else {
                     return .failure(WireError(.invalidState, "unknown job"))
                 }
-                status.leases[i].state = .killing
+                status.leases[i].state = k.soft == true ? .stopRequested : .killing
                 return .success(.killJob(status))
             case .setSettings(let s):
                 status.settings = s

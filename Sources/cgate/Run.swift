@@ -109,7 +109,8 @@ enum Runner {
                 if !softNoticed {
                     softNoticed = true
                     ctx.stderr(r == .walltime ? CgateMessage.walltimeNotice(command: text, max: j.max)
-                                              : CgateMessage.softStopNotice)
+                               : r == .userKill ? CgateMessage.jobStopNotice(command: text)
+                               : CgateMessage.softStopNotice)
                 }
             case .heartbeat(.hardStop(let r))?:
                 if killReason == nil {
