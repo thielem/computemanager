@@ -21,6 +21,9 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         let r = Request(id: "1", GateRequest.setGate(SetGateRequest(level: .noMore, slots: 0)))
         #expect(try json(r) == #"{"body":{"level":"noMore","slots":0},"id":"1","op":"setGate","v":1}"#)
         #expect(try json(Request(id: "2", GateRequest.status)) == #"{"id":"2","op":"status","v":1}"#)
+        let c = Request(id: "3", GateRequest.cancelTicket(CancelTicketRequest(ticket: "t1")))
+        #expect(try json(c) == #"{"body":{"ticket":"t1"},"id":"3","op":"cancelTicket","v":1}"#)
+        #expect(try roundTrip(c).message == c.message)
     }
 
     @Test func responseWireShape() throws {
@@ -52,6 +55,7 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
             .setGate(SetGateRequest(level: .hardStop)),
             .meeting,
             .killJob(KillJobRequest(jobId: UUID())),
+            .killJob(KillJobRequest(jobId: UUID(), soft: true)),
             .setSettings(GateSettings(slots: 3, patterns: ["make"], defaultMaxRuntimeSeconds: 60,
                                       maxRuntimeCapSeconds: 120)),
             .acquire(AcquireRequest(sessionId: "s", cwd: "/p", command: "make", pid: 10, pgid: 11,
@@ -62,6 +66,32 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
             let r = Request(id: "x", m)
             #expect(try roundTrip(r) == r)
         }
+    }
+
+    @Test func killJobSoftBackwardCompatible() throws {
+        let id = UUID()
+        let old = try JSONDecoder().decode(KillJobRequest.self, from: Data(#"{"jobId":"\#(id.uuidString)"}"#.utf8))
+        #expect(old == KillJobRequest(jobId: id) && old.soft == nil)
+        let hard = try String(decoding: JSONEncoder().encode(KillJobRequest(jobId: id)), as: UTF8.self)
+        #expect(!hard.contains("soft"))  // old peers see the exact old body
+        let soft = try JSONDecoder().decode(KillJobRequest.self, from: JSONEncoder().encode(KillJobRequest(jobId: id, soft: true)))
+        #expect(soft.soft == true)
+    }
+
+    @Test func gateSettingsDecodeWithoutHoldAndGrace() throws {
+        let old = #"{"slots":3,"patterns":["make"],"defaultMaxRuntimeSeconds":600,"maxRuntimeCapSeconds":1800}"#
+        let s = try JSONDecoder().decode(GateSettings.self, from: Data(old.utf8))
+        #expect(s == GateSettings(slots: 3, patterns: ["make"], defaultMaxRuntimeSeconds: 600,
+                                  maxRuntimeCapSeconds: 1800))
+        #expect(s.ticketHoldSeconds == Defaults.ticketHold && s.walltimeGraceSeconds == Defaults.walltimeGrace)
+        let t = try JSONDecoder().decode(TicketInfo.self, from: Data(#"{"id":"t1","position":1}"#.utf8))
+        #expect(t.holdSeconds == nil)
+        let h = try JSONDecoder().decode(HookCheckRequest.self,
+                                         from: Data(#"{"sessionId":"s","toolName":"Bash","command":"ls"}"#.utf8))
+        #expect(h.agentId == nil)
+        let l = try JSONDecoder().decode(Ticket.self,
+                                         from: Data(#"{"id":"t1","sessionId":"s","cwd":"/p","issuedAt":0}"#.utf8))
+        #expect(l.agentId == nil)
     }
 
     @Test func gateRepliesRoundTrip() throws {
@@ -147,12 +177,20 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         c.year = 2026; c.month = 1; c.day = 2; c.hour = 9; c.minute = 5
         let d = Calendar.current.date(from: c)!
         #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 2, eta: d)) ==
-            "compute busy: ticket t3, position 2, next slot ~09:05. Run in background: cgate wait --ticket t3; do other work meanwhile")
-        #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 1, eta: nil)).contains("next slot ~?."))
+            "compute busy: ticket t3, position 2, next slot by ~09:05 (latest), then held for you 2 min. Start `cgate wait --ticket t3` in the background now; you'll be notified when it completes. Don't rely on any other message; do other work meanwhile")
+        #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 2, eta: d, holdSeconds: 90)).contains("held for you 90 s."))
+        #expect(CgateMessage.busy(TicketInfo(id: "t3", position: 1, eta: nil)).contains("next slot time unknown, then held for you 2 min."))
+        #expect(CgateMessage.busyWaiting(TicketInfo(id: "t3", position: 2, eta: d))
+                .hasPrefix("compute busy: ticket t3, position 2, next slot by ~09:05 (latest); waiting"))
         #expect(CgateMessage.walltimeKilled(max: 900) == "killed: exceeded declared max runtime (15m)")
         #expect(CgateMessage.ticketExpired("t3") == "ticket t3 expired; retry cgate run")
-        #expect(CgateMessage.slotReady(ticket: "t3", heldUntil: d) ==
-            "slot ready (ticket t3, held until 09:05): cgate run --ticket t3 --max ... -- <cmd>")
+        #expect(CgateMessage.slotReady(ticket: "t3", heldUntil: d, now: d - 120) ==
+            "Slot ready for ticket t3 — claim within 2 min with `cgate run --ticket t3 --max <est> -- '<cmd>'`, held until 09:05.")
+        #expect(CgateMessage.walltimeNotice(command: "make", max: 600, grace: 60) ==
+            "compute gate: max runtime (10m) of `make` exceeded. Stop it now — the process will be killed in 60 s")
+        #expect(CgateMessage.jobStopNotice(command: "make").contains("will not be killed automatically"))
+        #expect([CgateMessage.human(60), CgateMessage.human(90), CgateMessage.human(120), CgateMessage.human(600)]
+                == ["60 s", "90 s", "2 min", "10 min"])
         #expect(CgateMessage.gateOff == "Compute gate off — continue without heavy runs or stop and report")
     }
 

@@ -4,7 +4,7 @@
 //       Hosts GateService on <path>. Logs every request ("req <json>") and every status change
 //       ("status <json>") to stdout. Without --push, notices are NOT pushed to Claude Code
 //       messaging sockets (hook delivery only).
-//   gatehost ctl --socket <path> status | setGate <level> [slots] | killJob <uuid> | meeting
+//   gatehost ctl --socket <path> status | setGate <level> [slots] | killJob <uuid> [soft] | meeting
 //       Sends one request, prints the reply body as JSON.
 #if DEBUG
 @testable import GateCore
@@ -71,8 +71,8 @@ case "ctl":
         guard args.count >= 2, let l = GateLevel(rawValue: args[1]) else { die("setGate <level> [slots]") }
         req = .setGate(SetGateRequest(level: l, slots: args.count > 2 ? Int(args[2]) : nil))
     case "killJob":
-        guard args.count == 2, let id = UUID(uuidString: args[1]) else { die("killJob <uuid>") }
-        req = .killJob(KillJobRequest(jobId: id))
+        guard args.count >= 2, let id = UUID(uuidString: args[1]) else { die("killJob <uuid> [soft]") }
+        req = .killJob(KillJobRequest(jobId: id, soft: args.count > 2 && args[2] == "soft" ? true : nil))
     default: die("ctl: unknown op \(op)")
     }
     do {

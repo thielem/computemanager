@@ -34,7 +34,7 @@ final class MBox {
     func heartbeat(_ r: JobHeartbeatRequest, now: Date) -> HeartbeatDirective { m.heartbeat(r, now: now) }
     func hookCheck(_ r: HookCheckRequest, now: Date) -> HookDecision { m.hookCheck(r, now: now) }
     func waitStatus(_ id: String, now: Date) -> WaitTicketResult { m.waitStatus(id, now: now) }
-    func killJob(_ id: UUID, now: Date) -> Bool { m.killJob(id, now: now) }
+    func killJob(_ id: UUID, soft: Bool = false, now: Date) -> Bool { m.killJob(id, soft: soft, now: now) }
     func release(_ id: UUID, now: Date) { m.release(id, now: now) }
     func advance(now: Date) { m.advance(now: now) }
     @discardableResult func reap(dead: Set<Int32>, stopped: Set<Int32> = [], now: Date) -> [Lease] {
@@ -109,7 +109,8 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
 
 @Suite struct TicketTests {
     @Test func sameSessionCwdReusesTicketUnknownDoesNot() {
-        let m = machine(slots: 0)
+        let m = machine(slots: 1)
+        _ = m.acquire(req("x"), now: t0)
         #expect(busy(m.acquire(req("s"), now: t0))?.id == "t1")
         #expect(busy(m.acquire(req("s"), now: t0))?.id == "t1")
         #expect(busy(m.acquire(req("s", cwd: "/other"), now: t0))?.id == "t2")
@@ -199,18 +200,48 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
         let t1 = busy(m.acquire(req("c"), now: t0))
         let t2 = busy(m.acquire(req("d"), now: t0))
         let t3 = busy(m.acquire(req("e"), now: t0))
-        #expect(t1 == TicketInfo(id: "t1", position: 1, eta: t0 + 300))
-        #expect(t2 == TicketInfo(id: "t2", position: 2, eta: t0 + 600))
+        #expect(t1 == TicketInfo(id: "t1", position: 1, eta: t0 + 300, holdSeconds: 120))
+        #expect(t2 == TicketInfo(id: "t2", position: 2, eta: t0 + 600, holdSeconds: 120))
         // Third in line: wraps around, plus one default max (15 min).
-        #expect(t3 == TicketInfo(id: "t3", position: 3, eta: t0 + 300 + 900))
+        #expect(t3 == TicketInfo(id: "t3", position: 3, eta: t0 + 300 + 900, holdSeconds: 120))
         // Raw deadlines: overdue ETAs don't move with the clock (L4).
         #expect(m.ticketInfo("t1", now: t0 + 400)?.eta == t0 + 300)
     }
 
-    @Test func etaUnknownWithoutLeases() {
+    @Test func zeroSlotsClosesGate() throws {
         let m = machine(slots: 0)
-        #expect(busy(m.acquire(req("a"), now: t0))?.eta == nil)
-        #expect(m.nextSlotETA(t0) == nil)
+        #expect(m.acquire(req("a"), now: t0) == .off(message: CgateMessage.noSlots))
+        #expect(m.tickets.isEmpty && m.nextSlotETA(t0) == nil)
+        // Slots set to 0 while a ticket waits: no ETA, no hold, claims answer off.
+        let n = machine(slots: 1)
+        _ = try #require(granted(n.acquire(req("a"), now: t0)))
+        #expect(busy(n.acquire(req("b"), now: t0))?.eta != nil)
+        n.m.setGate(.on, slots: 0, now: t0)
+        #expect(n.ticketInfo("t1", now: t0)?.eta == nil && n.nextSlotETA(t0) == nil && n.held.isEmpty)
+        #expect(n.acquire(req("b", ticket: "t1"), now: t0) == .off(message: CgateMessage.noSlots))
+    }
+
+    @Test func cancelTicketFreesHeldSlot() throws {
+        let m = machine(slots: 1)
+        let a = try #require(granted(m.acquire(req("a"), now: t0)))
+        _ = m.acquire(req("b"), now: t0)
+        _ = m.acquire(req("c"), now: t0)
+        m.m.cancelTicket("t1", now: t0)
+        m.release(a, now: t0)
+        #expect(m.tickets.map(\.id) == ["t2"] && m.held.first?.ticketId == "t2")
+    }
+
+    @Test func endedLeaseDropsItsUndeliveredNotices() throws {
+        let m = machine(slots: 2)
+        let a = try #require(granted(m.acquire(req("s", max: 3600), now: t0)))
+        _ = try #require(granted(m.acquire(req("s", cwd: "/p/b", max: 60, pid: 7), now: t0)))
+        #expect(m.killJob(a, soft: true, now: t0))
+        m.advance(now: t0 + 61)  // b hits walltime
+        #expect(m.notices.count == 2)
+        m.release(a, now: t0 + 61)
+        #expect(m.notices.count == 1)
+        m.reap(dead: [7], now: t0 + 62)
+        #expect(m.notices.isEmpty)
     }
 
     @Test func slotReadyNoticeOnlyWithoutWaiter() throws {
@@ -321,12 +352,68 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
         #expect(m.notices.count == 1)
     }
 
+    @Test func softKillJobThenHard() throws {
+        let m = machine()
+        let a = try #require(granted(m.acquire(req("a"), now: t0)))
+        let b = try #require(granted(m.acquire(req("b"), now: t0)))
+        #expect(m.killJob(a, soft: true, now: t0))
+        #expect(!m.killJob(UUID(), soft: true, now: t0))
+        #expect(m.leases[0].state == .stopRequested && m.leases[0].stopReason == .userKill)
+        #expect(m.leases[1].state == .running)
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0) == .softStop(reason: .userKill))
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: b), now: t0) == .continue)
+        #expect(m.notices.map(\.text) == [CgateMessage.jobStopNotice(command: "make")])
+        #expect(m.outbox.map(\.text) == [CgateMessage.jobStopNotice(command: "make")])
+        #expect(m.killJob(a, soft: true, now: t0 + 1))  // repeat soft: no-op
+        #expect(m.notices.count == 1 && m.leases[0].stopRequestedAt == t0)
+        m.setGate(.on, slots: nil, now: t0 + 2)  // per-job stop survives gate back on
+        #expect(m.leases[0].state == .stopRequested)
+        #expect(m.killJob(a, now: t0 + 3))
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 3) == .hardStop(reason: .userKill))
+    }
+
+    @Test func gateSoftStopAndWalltimeMarkStopRequested() throws {
+        let m = machine()
+        let a = try #require(granted(m.acquire(req("a"), now: t0)))
+        let b = try #require(granted(m.acquire(req("b", max: 60), now: t0)))
+        m.setGate(.softStop, slots: nil, now: t0)
+        #expect(m.leases.allSatisfy { $0.state == .stopRequested })
+        #expect(m.killJob(a, soft: true, now: t0))  // already requested: no extra notice
+        #expect(!m.notices.contains { $0.text == CgateMessage.jobStopNotice(command: "make") })
+        m.setGate(.on, slots: nil, now: t0)
+        m.advance(now: t0 + 60)
+        #expect(m.leases.first { $0.jobId == b }?.state == .stopRequested)
+        #expect(m.leases.first { $0.jobId == a }?.state == .running)
+    }
+
     @Test func settingsSanitized() {
         let m = machine()
         m.setSettings(GateSettings(slots: -3, patterns: ["x"], defaultMaxRuntimeSeconds: 9999,
                                    maxRuntimeCapSeconds: 600), now: t0)
         #expect(m.settings.slots == 0 && m.settings.defaultMaxRuntimeSeconds == 600)
         #expect(m.settings.patterns == ["x"])
+        m.setSettings(GateSettings(ticketHoldSeconds: 1, walltimeGraceSeconds: 9999), now: t0)
+        #expect(m.settings.ticketHoldSeconds == 30 && m.settings.walltimeGraceSeconds == 300)
+        m.setSettings(GateSettings(ticketHoldSeconds: 9999, walltimeGraceSeconds: 0), now: t0)
+        #expect(m.settings.ticketHoldSeconds == 600 && m.settings.walltimeGraceSeconds == 10)
+    }
+
+    @Test func holdFromSettings() throws {
+        let m = machine(slots: 1)
+        var s = m.settings
+        s.ticketHoldSeconds = 90
+        m.setSettings(s, now: t0)
+        let a = try #require(granted(m.acquire(req("a"), now: t0)))
+        let t = try #require(busy(m.acquire(req("b"), now: t0)))
+        #expect(t.holdSeconds == 90 && CgateMessage.busy(t).contains("then held for you 90 s"))
+        m.release(a, now: t0)
+        #expect(m.held.first?.until == t0 + 90)
+        #expect(m.notices.map(\.text) == [CgateMessage.slotReady(ticket: "t1", heldUntil: t0 + 90, now: t0)])
+        #expect(m.notices[0].text.contains("claim within 90 s"))
+        m.advance(now: t0 + 89)
+        #expect(m.tickets.count == 1)
+        m.advance(now: t0 + 90)
+        #expect(m.tickets.isEmpty)
     }
 }
 
@@ -337,11 +424,24 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
         #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 59) == .continue)
         m.outbox = []
         #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 60) == .softStop(reason: .walltime))
-        #expect(m.notices.count == 1 && m.notices[0].text.contains("exceeded its declared max runtime (1m)"))
+        #expect(m.notices.count == 1 && m.notices[0].text.contains("max runtime (1m) of `make` exceeded"))
         #expect(m.outbox == [Push(sessionId: "a", socket: "/tmp/cc-socks/1.sock", text: m.notices[0].text)])
         #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 119) == .softStop(reason: .walltime))
         #expect(m.notices.count == 1)
         #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 120) == .hardStop(reason: .walltime))
+    }
+
+    @Test func graceFromSettings() throws {
+        let m = machine()
+        var s = m.settings
+        s.walltimeGraceSeconds = 30
+        m.setSettings(s, now: t0)
+        let a = try #require(granted(m.acquire(req("a", max: 60), now: t0)))
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 60) == .softStop(reason: .walltime))
+        #expect(m.notices.map(\.text) == [CgateMessage.walltimeNotice(command: "make", max: 60, grace: 30)])
+        #expect(m.notices[0].text.hasSuffix("killed in 30 s"))
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 89) == .softStop(reason: .walltime))
+        #expect(m.heartbeat(JobHeartbeatRequest(jobId: a), now: t0 + 90) == .hardStop(reason: .walltime))
     }
 
     @Test func lateHeartbeatJumpsToKill() throws {
@@ -425,6 +525,15 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
 }
 
 @Suite struct MatcherTests {
+    @Test func cgateRunCommandTexts() {
+        #expect(CommandMatcher.cgateRunCommands("cd x && cgate run --wait -- 'swift test' > /tmp/l 2>&1") == ["swift test"])
+        #expect(CommandMatcher.cgateRunCommands("cgate run -- make all >log") == ["make all"])
+        #expect(CommandMatcher.cgateRunCommands("cgate status; cgate wait --ticket t1; ls") == [])
+        #expect(CommandMatcher.cgateRunCommands("echo 'cgate run -- x'") == [])
+        #expect(CommandMatcher.cgateRunCommands("cgate run -- grep -c '<div' f") == ["grep -c '<div' f"])
+        #expect(CommandMatcher.cgateRunCommands("cgate run -- echo \\>x") == ["echo '>x'"])
+    }
+
     let p = Defaults.autoWrapPatterns
 
     @Test func matching() {
@@ -478,5 +587,105 @@ func machine(slots: Int = 2, level: GateLevel = .on) -> MBox {
                   "npx prettier .", "sh setup.sh", "uv pip list"] {
             #expect(!CommandMatcher.matches(c, patterns: p), "\(c)")
         }
+    }
+}
+
+@Suite struct AgentTests {
+    func run(_ cmd: String, agent: String?, session: String = "s", cwd: String = "/p/a") -> HookCheckRequest {
+        HookCheckRequest(sessionId: session, toolName: "Bash", command: cmd, cwd: cwd, agentId: agent)
+    }
+
+    func acq(_ cmd: String, session: String = "s", cwd: String = "/p/a", ticket: String? = nil) -> AcquireRequest {
+        AcquireRequest(sessionId: session, cwd: cwd, command: cmd, pid: 1, ticket: ticket,
+                       messagingSocket: "/tmp/cc-socks/s.sock")
+    }
+
+    @Test func matchNoMatchExpiry() throws {
+        let m = machine(slots: 4)
+        #expect(m.hookCheck(run("cgate run --max 5m -- 'swift test'", agent: "A"), now: t0) == .allow)
+        _ = m.acquire(acq("make"), now: t0)  // different command: main session
+        _ = m.acquire(acq("swift test"), now: t0 + 1)
+        #expect(m.leases.map(\.agentId) == [nil, "A"])
+        #expect(m.pendingAgents.isEmpty)  // consumed
+        _ = m.hookCheck(run("cgate run -- swift build", agent: "B"), now: t0)
+        _ = m.acquire(acq("swift build"), now: t0 + 16)  // expired
+        #expect(m.leases.last?.agentId == nil)
+        _ = m.hookCheck(run("cgate wait --ticket t1", agent: "C"), now: t0 + 20)  // only `run` attributes
+        #expect(m.pendingAgents.isEmpty)
+        _ = m.hookCheck(run("cgate run -- ls", agent: nil), now: t0 + 20)  // main session: stashed as nil
+        #expect(m.pendingAgents.map(\.agentId) == [nil])
+    }
+
+    /// Hook line → the exact command text cgate sends; one entry per invocation.
+    @Test func exactCommandTextAttribution() throws {
+        let big = String(repeating: "x", count: 5000)
+        let cases: [(hook: String, acquired: [String])] = [
+            (#"cgate run --max 5m -- pytest -k "a or b""#, ["pytest -k 'a or b'"]),
+            (#"cgate run -- 'echo "it'\''s"'"#, [#"echo "it's""#]),
+            (#"cgate run -- 'a'\''b' c"#, [#"'a'\''b' c"#]),
+            ("cgate run -- 'echo \(big)'", [CommandText.capped("echo \(big)")]),
+            ("cgate run -- a; cgate run -- b", ["a", "b"]),
+            ("bash -c 'cgate run -- make test 2>&1' > /tmp/log", ["make test"]),
+        ]
+        for c in cases {
+            let m = machine(slots: 4)
+            _ = m.hookCheck(run(c.hook, agent: "A"), now: t0)
+            for cmd in c.acquired { _ = m.acquire(acq(cmd), now: t0 + 1) }
+            #expect(m.leases.map(\.agentId) == c.acquired.map { _ in "A" }, "\(c.hook)")
+            #expect(m.pendingAgents.isEmpty, "\(c.hook)")
+        }
+    }
+
+    @Test func mainSessionDoesNotTakeSubagentEntry() throws {
+        for order in [false, true] {
+            let m = machine(slots: 4)
+            _ = m.hookCheck(run("cgate run -- make test", agent: "A"), now: t0)
+            _ = m.hookCheck(run("cgate run -- make", agent: nil), now: t0)
+            if order {
+                _ = m.acquire(acq("make test"), now: t0 + 1)
+                _ = m.acquire(acq("make"), now: t0 + 1)
+            } else {
+                _ = m.acquire(acq("make"), now: t0 + 1)
+                _ = m.acquire(acq("make test"), now: t0 + 1)
+            }
+            #expect(m.leases.map(\.agentId) == (order ? ["A", nil] : [nil, "A"]))
+        }
+    }
+
+    @Test func twoSubagentsSameSession() throws {
+        let m = machine(slots: 4)
+        _ = m.hookCheck(run("cgate run -- 'make'", agent: "A", cwd: "/p/a"), now: t0)
+        _ = m.hookCheck(run("cd /p/b && cgate run -- 'make'", agent: "B", cwd: "/p/b"), now: t0)
+        _ = m.acquire(acq("make", cwd: "/p/b"), now: t0)
+        _ = m.acquire(acq("make", cwd: "/p/a"), now: t0)
+        #expect(m.leases.map(\.agentId) == ["B", "A"])
+    }
+
+    @Test func ticketsAndNoticesPerAgentNoPush() throws {
+        let m = machine(slots: 1)
+        let main = try #require(granted(m.acquire(acq("make"), now: t0)))
+        _ = m.hookCheck(run("cgate run -- 'make'", agent: "A"), now: t0)
+        let ta = try #require(busy(m.acquire(acq("make"), now: t0)))
+        let tm = try #require(busy(m.acquire(acq("make"), now: t0)))  // main: own ticket, not A's
+        #expect(ta.id == "t1" && tm.id == "t2" && m.tickets.map(\.agentId) == ["A", nil])
+        m.outbox = []
+        m.release(main, now: t0)
+        #expect(m.notices.map(\.agentId) == ["A"] && m.outbox.isEmpty)  // no push into the parent
+        #expect(m.hookCheck(run("ls", agent: nil), now: t0) == .allow)
+        #expect(m.hookCheck(run("ls", agent: "B"), now: t0) == .allow)
+        guard case .notice = m.hookCheck(run("ls", agent: "A"), now: t0) else { Issue.record("no notice"); return }
+        // A claims with its ticket (no hook attribution needed); stop notices also go to A only.
+        let a = try #require(granted(m.acquire(acq("make", ticket: "t1"), now: t0 + 1)))
+        #expect(m.leases.first?.agentId == "A")
+        #expect(m.killJob(a, soft: true, now: t0 + 1))
+        #expect(m.notices.map(\.agentId) == ["A"] && m.outbox.isEmpty)
+    }
+
+    @Test func oldClientsWithoutAgentUnchanged() throws {
+        let m = machine(slots: 1)
+        _ = m.acquire(acq("make"), now: t0)
+        m.setGate(.softStop, slots: nil, now: t0)
+        #expect(m.outbox.count == 1 && m.notices.first?.agentId == nil)
+        #expect(m.hookCheck(run("ls", agent: nil), now: t0) == .notice(text: CgateMessage.softStopNotice))
     }
 }

@@ -88,7 +88,7 @@ enum AppRuntime {
         if let out = ProcessInfo.processInfo.environment["COMPUTEMANAGER_SNAPSHOT"] {
             Snapshot.write(model: m, to: out)
         }
-        // Same path as the gear button (the menu bar item can't be clicked from scripts).
+        // Same path as the gear button.
         if ProcessInfo.processInfo.environment["COMPUTEMANAGER_OPEN_SETTINGS"] != nil {
             SettingsWindow.show(m)
         }
@@ -96,7 +96,7 @@ enum AppRuntime {
     }
 
     /// Only an instance that actually launched touches fans (a duplicate must not reset them).
-    private static var launched = false
+    private(set) static var launched = false
 
     static func terminate() {
         guard launched else { return }

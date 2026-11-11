@@ -21,6 +21,10 @@ struct SettingsView: View {
                         minutes(\.defaultMaxRuntimeSeconds), 1...cap)
                 stepRow("Cap", "\(Int(settings.maxRuntimeCapSeconds / 60)) min",
                         minutes(\.maxRuntimeCapSeconds), 5...Self.capLimit, step: 5)
+                stepRow("Ticket hold", CgateMessage.human(settings.ticketHoldSeconds),
+                        seconds(\.ticketHoldSeconds), 30...600, step: 30)
+                stepRow("Kill grace", CgateMessage.human(settings.walltimeGraceSeconds),
+                        seconds(\.walltimeGraceSeconds), 10...300, step: 10)
             }
 
             Section {
@@ -56,7 +60,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 400, height: 640)
+        .frame(width: 400, height: 700)
         .onAppear { reloadPatterns() }
         .onDisappear { commitPatterns() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in commitPatterns() }
@@ -100,6 +104,14 @@ struct SettingsView: View {
     private func minutes(_ key: WritableKeyPath<GateSettings, TimeInterval>) -> Binding<Int> {
         Binding(get: { Int(settings[keyPath: key] / 60) }, set: { m in
             let s = Self.setting(settings, key, minutes: m)
+            Task { await gate.updateSettings(s) }
+        })
+    }
+
+    private func seconds(_ key: WritableKeyPath<GateSettings, TimeInterval>) -> Binding<Int> {
+        Binding(get: { Int(settings[keyPath: key]) }, set: { v in
+            var s = settings
+            s[keyPath: key] = TimeInterval(v)
             Task { await gate.updateSettings(s) }
         })
     }

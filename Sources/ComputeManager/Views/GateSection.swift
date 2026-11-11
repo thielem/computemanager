@@ -28,7 +28,7 @@ struct GateSection: View {
                 Text("\(gate.status.slots)").monospacedDigit()
                 Stepper("", value: Binding(get: { gate.status.slots },
                                            set: { n in Task { await gate.setSlots(n) } }),
-                        in: 1...16)
+                        in: 0...16)
                     .labelsHidden()
             }
 
@@ -37,7 +37,7 @@ struct GateSection: View {
                     VStack(spacing: 8) {
                         ForEach(gate.runningJobs) { lease in
                             JobRow(lease: lease, now: ctx.date) {
-                                Task { await gate.kill(lease.jobId) }
+                                Task { await gate.stop(lease.jobId) }
                             }
                         }
                     }

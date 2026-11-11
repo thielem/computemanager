@@ -56,8 +56,10 @@ import Testing
         await vm.setSlots(3)
         #expect(fake.requests == [.setGate(SetGateRequest(level: .noMore, slots: 3))])
         #expect(vm.status.slots == 3)
-        await vm.setSlots(0)
-        #expect(vm.status.slots == 1)
+        await vm.setSlots(0)  // 0 = no new jobs, running ones continue
+        #expect(vm.status.slots == 0 && vm.status.level == .noMore)
+        await vm.setSlots(-1)
+        #expect(vm.status.slots == 0)
     }
 
     @Test func killAndPersist() async {
@@ -66,17 +68,31 @@ import Testing
         let vm = make(fake)
         var saved: [GateStore.Snapshot] = []
         vm.onPersist = { saved.append($0) }
-        await vm.kill(l.jobId)
+        await vm.stop(l.jobId)
+        #expect(vm.status.leases.first?.state == .stopRequested)
+        await vm.stop(l.jobId)
         #expect(vm.status.leases.first?.state == .killing)
+        #expect(fake.requests == [.killJob(KillJobRequest(jobId: l.jobId, soft: true)),
+                                  .killJob(KillJobRequest(jobId: l.jobId))])
         #expect(saved.isEmpty)
         await vm.setOn(false)
         await vm.chooseOff(.noMore)
         #expect(saved.last?.level == .noMore)
     }
 
+    @Test func stopOnStopRequestedJobKills() async {
+        var l = lease()
+        l.state = .stopRequested  // e.g. gate soft stop or walltime notice
+        let fake = FakeGate(leases: [l])
+        let vm = make(fake)
+        await vm.stop(l.jobId)
+        #expect(fake.requests == [.killJob(KillJobRequest(jobId: l.jobId))])
+        #expect(vm.status.leases.first?.state == .killing)
+    }
+
     @Test func errorsSurface() async {
         let vm = make(FakeGate())
-        await vm.kill(UUID())
+        await vm.stop(UUID())
         #expect(vm.lastError == "unknown job")
     }
 
@@ -101,6 +117,15 @@ import Testing
         s.slots = 4
         store.save(.init(settings: s, level: .hardStop))
         #expect(store.load() == .init(settings: s, level: .noMore))
+    }
+
+    @Test func storeLoadsOldFileWithoutHoldAndGrace() throws {
+        let url = URL(fileURLWithPath: "/tmp/cm-test-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data(#"{"level":"on","settings":{"slots":3,"patterns":["make"],"defaultMaxRuntimeSeconds":600,"maxRuntimeCapSeconds":1800}}"#.utf8)
+            .write(to: url)
+        let s = GateStore(url: url).load().settings
+        #expect(s.slots == 3 && s.ticketHoldSeconds == 120 && s.walltimeGraceSeconds == 60)
     }
 
     @Test func storeKeepsBackupOfUnreadableFile() throws {

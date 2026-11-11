@@ -3,7 +3,7 @@ import Shared
 
 /// Parsed cgate invocation. Hand-rolled parser (no dependencies).
 ///
-///   cgate run [--max <dur>] [--session <id>] [--ticket <id>] -- <cmd...>
+///   cgate run [--wait] [--max <dur>] [--session <id>] [--ticket <id>] -- <cmd...>
 ///   cgate wait --ticket <id>
 ///   cgate hook            (reads Claude Code hook JSON on stdin)
 ///   cgate status
@@ -20,6 +20,8 @@ struct RunOptions: Equatable {
     var session: String?
     var ticket: String?
     var command: [String]
+    /// Busy → keep the ticket, wait for the slot, then run (instead of exit 75).
+    var wait = false
 }
 
 struct UsageError: Error, Equatable, CustomStringConvertible {
@@ -28,11 +30,14 @@ struct UsageError: Error, Equatable, CustomStringConvertible {
 
 enum CLI {
     static let usage = """
-        usage: cgate run [--max <dur>] [--session <id>] [--ticket <id>] -- <cmd...>
+        usage: cgate run [--wait] [--max <dur>] [--session <id>] [--ticket <id>] -- <cmd...>
                cgate wait --ticket <id>
                cgate hook
                cgate status
         dur: 90s, 15m, 1h, 1h30m (bare number = minutes)
+        --wait: when busy, wait for the slot and run (default: exit 75 with a ticket)
+        exit code = last command of a pipeline: don't pipe into tail/head; redirect
+        (> /tmp/x.log 2>&1) and read the file afterwards
         """
 
     static func parse(_ args: [String]) throws -> Command {
@@ -58,7 +63,10 @@ enum CLI {
         guard let dd = args.firstIndex(of: "--") else {
             throw UsageError(description: "run requires -- <cmd>")
         }
-        let opts = try parseOptions(Array(args[..<dd]), allowed: ["--max", "--session", "--ticket"])
+        var pre = Array(args[..<dd])
+        let wait = pre.contains("--wait")
+        pre.removeAll { $0 == "--wait" }
+        let opts = try parseOptions(pre, allowed: ["--max", "--session", "--ticket"])
         guard opts.positional.isEmpty else {
             throw UsageError(description: "unexpected argument '\(opts.positional[0])'")
         }
@@ -72,7 +80,7 @@ enum CLI {
             max = d
         }
         return RunOptions(maxRuntime: max, session: opts.values["--session"],
-                          ticket: opts.values["--ticket"], command: cmd)
+                          ticket: opts.values["--ticket"], command: cmd, wait: wait)
     }
 
     private static func parseOptions(_ args: [String], allowed: Set<String>) throws

@@ -82,14 +82,69 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
     }
 
     @Test func busyAndOffExitCodes() async throws {
-        let h = try Harness(slots: 0)
+        let h = try Harness(slots: 1)
         let ctx = h.ctx()
+        _ = await h.svc.handle(.acquire(AcquireRequest(sessionId: "x", cwd: "/x", command: "make", pid: 1)))
         #expect(await offPool { Runner.run(opts(["true"]), ctx) } == CgateExit.busy)
         #expect(h.stderr.all.last?.hasPrefix("compute busy: ticket t1, position 1") == true)
         #expect(await offPool { Runner.run(opts(["true"], ticket: "t9"), ctx) } == CgateExit.ticketExpired)
         _ = await h.svc.handle(.setGate(SetGateRequest(level: .noMore)))
         #expect(await offPool { Runner.run(opts(["true"]), ctx) } == CgateExit.gateOff)
         #expect(h.stderr.all.last == CgateMessage.gateOff)
+        _ = await h.svc.handle(.setGate(SetGateRequest(level: .on, slots: 0)))
+        #expect(await offPool { Runner.run(opts(["true"]), ctx) } == CgateExit.gateOff)
+        #expect(h.stderr.all.last == CgateMessage.noSlots)
+    }
+
+    @Test func waitersGiveUpOnZeroSlots() async throws {
+        let h = try Harness()
+        let ctx = h.ctx()
+        let link = h.link, lines = h.stderr
+        _ = await h.svc.handle(.acquire(AcquireRequest(sessionId: "x", cwd: "/x", command: "make", pid: 1)))
+        #expect(await offPool { Runner.run(opts(["true"]), ctx) } == CgateExit.busy)
+        var o = opts(["true"])
+        o.session = "other"
+        o.wait = true
+        let o2 = o
+        async let second = offPool { Runner.run(o2, ctx) }
+        #expect(await eventually { await h.status().tickets.count == 2 })
+        _ = await h.svc.handle(.setGate(SetGateRequest(level: .on, slots: 0)))
+        #expect(await offPool { Waiter.run(ticket: "t1", link: link, stderr: { lines.add($0) }) } == CgateExit.gateOff)
+        #expect(lines.all.last == CgateMessage.noSlots)
+        #expect(await second == CgateExit.gateOff)
+        #expect(await h.status().tickets.map(\.id) == ["t1"])  // --wait cancelled t2
+    }
+
+    @Test func abandonedWaitCancelsTicketOnce() async throws {
+        let h = try Harness()
+        _ = await h.svc.handle(.acquire(AcquireRequest(sessionId: "x", cwd: "/x", command: "make", pid: 1)))
+        _ = await h.svc.handle(.acquire(AcquireRequest(sessionId: "y", cwd: "/x", command: "make", pid: 1)))
+        #expect(await h.status().tickets.count == 1)
+        let w = WaitingTicket(link: h.link)
+        w.set("t1")
+        #expect(await offPool { w.cancel() })
+        #expect(await offPool { !w.cancel() })
+        #expect(await h.status().tickets.isEmpty)
+    }
+
+    @Test func signalBeforeSpawnReleasesGrantAndNeverSpawns() async throws {
+        let h = try Harness()
+        let w = WaitingTicket(link: h.link)
+        w.beginAcquire()
+        #expect(await offPool { !w.abort(SIGINT) })  // reply in flight: the run loop handles it
+        guard case .success(.acquire(.granted(let id, _))) = await h.svc.handle(
+            .acquire(AcquireRequest(sessionId: "x", cwd: "/x", command: "make", pid: 1))) else { Issue.record("grant"); return }
+        #expect(w.endAcquire(granted: id) == SIGINT)
+        await offPool { w.abortNow() }
+        #expect(await h.status().leases.isEmpty)
+        #expect(w.beginSpawn() == SIGINT)
+
+        let w2 = WaitingTicket(link: h.link)
+        #expect(await offPool { w2.abort(SIGTERM) })  // not acquiring, not spawned: exit now
+        #expect(w2.beginSpawn() == SIGTERM)
+        let w3 = WaitingTicket(link: h.link)
+        #expect(w3.beginSpawn() == nil)
+        #expect(!w3.abort(SIGHUP))  // spawned: forward instead
     }
 
     @Test func hardStopKillsProcessGroup() async throws {
@@ -102,7 +157,7 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         _ = await h.svc.handle(.setGate(SetGateRequest(level: .hardStop)))
         #expect(await code == CgateExit.stoppedByUser)
         #expect(h.stderr.all.last == CgateMessage.stoppedByUser)
-        #expect(kill(-pgid, 0) == -1 && errno == ESRCH)
+        #expect(await eventually(2) { kill(-pgid, 0) == -1 && errno == ESRCH })
         #expect(await h.status().leases.isEmpty)
     }
 
@@ -170,13 +225,46 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         #expect(Date().timeIntervalSince(start) < 5)
     }
 
+    @Test func waitFlagBlocksThenRuns() async throws {
+        let h = try Harness()
+        let ctx = h.ctx()
+        async let first = offPool { Runner.run(opts(["sleep 0.5"]), ctx) }
+        #expect(await eventually { await h.status().leases.count == 1 })
+        var o = opts(["true"])
+        o.session = "other"
+        o.wait = true
+        let o2 = o
+        #expect(await offPool { Runner.run(o2, ctx) } == 0)
+        #expect(await first == 0)
+        #expect(h.stderr.all.filter { $0.hasPrefix("compute busy: ticket t1") }.count == 1)
+        let st = await h.status()
+        #expect(st.tickets.isEmpty && st.leases.isEmpty)
+    }
+
+    @Test func waitFlagRespectsGateOff() async throws {
+        let h = try Harness()
+        let ctx = h.ctx()
+        async let first = offPool { Runner.run(opts(["sleep 1"]), ctx) }
+        #expect(await eventually { await h.status().leases.count == 1 })
+        var o = opts(["true"])
+        o.session = "other"
+        o.wait = true
+        let o2 = o
+        async let second = offPool { Runner.run(o2, ctx) }
+        #expect(await eventually { await h.status().tickets.count == 1 })
+        _ = await h.svc.handle(.setGate(SetGateRequest(level: .noMore)))
+        #expect(await second == CgateExit.gateOff)
+        #expect(await h.status().tickets.isEmpty)  // abandoned ticket cancelled
+        #expect(await first == 0)
+    }
+
     @Test func walltimeSoftThenKill() async throws {
         let h = try Harness()
         let ctx = h.ctx()
         async let code = offPool { Runner.run(opts(["sleep 30"], max: 60), ctx) }
         #expect(await eventually { await h.status().leases.first?.pgid != nil })
         h.clock.advance(60)
-        #expect(await eventually { h.stderr.all.contains { $0.contains("exceeded its declared max runtime (1m)") } })
+        #expect(await eventually { h.stderr.all.contains { $0.contains("max runtime (1m) of `sleep 30` exceeded") && $0.hasSuffix("killed in 60 s") } })
         h.clock.advance(60)
         #expect(await code == CgateExit.walltimeKill)
         #expect(h.stderr.all.last == CgateMessage.walltimeKilled(max: 60))
@@ -234,7 +322,7 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         let o = o2
         #expect(await offPool { Runner.run(o, ctx) } == CgateExit.busy)
         #expect(await offPool { Waiter.run(ticket: "t1", link: link, stderr: { lines.add($0) }) } == 0)
-        #expect(lines.all.last?.hasPrefix("slot ready (ticket t1, held until") == true)
+        #expect(lines.all.last?.hasPrefix("Slot ready for ticket t1 — claim within") == true)
         #expect(await first == 0)
         #expect(await offPool { Runner.run(RunOptions(maxRuntime: nil, session: "other", ticket: "t1",
                                                       command: ["true"]), ctx) } == 0)
@@ -300,6 +388,28 @@ func eventually(_ timeout: TimeInterval = 5, _ cond: () async -> Bool) async -> 
         #expect(out["permissionDecision"] as? String == "deny")
         #expect(out["permissionDecisionReason"] as? String == CgateMessage.softStopNotice)
         #expect(await offPool { Hook.output(stdin: stdin, link: link) } == nil)
+    }
+
+    @Test func subagentRunAttributedAndNoticeRouted() async throws {
+        let h = try Harness(slots: 1)
+        var run = input
+        run["agent_id"] = "agent-abc123"
+        run["tool_input"] = ["command": "cgate run --max 5m -- 'make all'"]
+        let link = h.link
+        let runIn = try JSONSerialization.data(withJSONObject: run)
+        #expect(await offPool { Hook.output(stdin: runIn, link: link) } == nil)
+        _ = await h.svc.handle(.acquire(AcquireRequest(sessionId: "sess", cwd: "/tmp/proj", command: "make all", pid: 1)))
+        #expect(await h.status().leases.first?.agentId == "agent-abc123")
+        _ = await h.svc.handle(.setGate(SetGateRequest(level: .softStop)))
+        var edit = input
+        edit["tool_name"] = "Edit"
+        edit["tool_input"] = ["file_path": "/x"]
+        let mainIn = try JSONSerialization.data(withJSONObject: edit)
+        #expect(await offPool { Hook.output(stdin: mainIn, link: link) } == nil)  // parent: nothing
+        edit["agent_id"] = "agent-abc123"
+        let subIn = try JSONSerialization.data(withJSONObject: edit)
+        let out = try json(await offPool { Hook.output(stdin: subIn, link: link) })
+        #expect(out["permissionDecisionReason"] as? String == CgateMessage.softStopNotice)
     }
 
     /// App unreachable → no output even for a heavy unwrapped command (exit 0 in main).

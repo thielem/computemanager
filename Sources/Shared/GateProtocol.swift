@@ -14,7 +14,7 @@ import Foundation
 // | `status`     | cgate status, UI | —                 | `GateStatus`                       |
 // | `setGate`    | UI / debug  | `SetGateRequest`       | `GateStatus`                       |
 // | `meeting`    | UI / debug  | —                      | `GateStatus` (gate → noMore; the APP also sets fans → auto via fand) |
-// | `killJob`    | UI / debug  | `KillJobRequest`       | `GateStatus` (hard stop for one job: notice + kill; reason userKill, exit 78; unknown job → invalidState) |
+// | `killJob`    | UI / debug  | `KillJobRequest`       | `GateStatus` (hard stop for one job: notice + kill; reason userKill, exit 78; `soft: true` → notice only, lease stopRequested/userKill, process untouched; unknown job → invalidState) |
 // | `setSettings`| UI / debug  | `GateSettings`         | `GateStatus` (slots, default/cap max runtime, auto-wrap patterns) |
 //
 // The app hosts GateCore in-process; the UI calls the same ops in-process through
@@ -49,11 +49,13 @@ public struct AcquireRequest: Codable, Sendable, Equatable {
     /// Set when re-registering an already running job after the heartbeat answered
     /// `unknownJob` (app restarted). Always granted; see `Reattach`.
     public var reattach: Reattach?
+    /// Display label: git toplevel folder (+ branch if not main/master); nil → cwd basename.
+    public var label: String?
 
     public init(sessionId: String, cwd: String, command: String, pid: Int32, pgid: Int32? = nil,
                 maxRuntimeSeconds: TimeInterval? = nil, ticket: String? = nil,
                 autoWrapped: Bool = false, messagingSocket: String? = nil,
-                reattach: Reattach? = nil) {
+                reattach: Reattach? = nil, label: String? = nil) {
         self.sessionId = sessionId
         self.cwd = cwd
         self.command = CommandText.capped(command)
@@ -64,6 +66,7 @@ public struct AcquireRequest: Codable, Sendable, Equatable {
         self.autoWrapped = autoWrapped
         self.messagingSocket = messagingSocket
         self.reattach = reattach
+        self.label = label
     }
 }
 
@@ -132,16 +135,27 @@ public struct HookCheckRequest: Codable, Sendable, Equatable {
     /// `tool_input.command` for Bash; nil otherwise.
     public var command: String?
     public var cwd: String?
+    /// Hook `agent_id` (present when a subagent makes the call); nil = main session.
+    public var agentId: String?
 
-    public init(sessionId: String, toolName: String, command: String? = nil, cwd: String? = nil) {
+    public init(sessionId: String, toolName: String, command: String? = nil, cwd: String? = nil,
+                agentId: String? = nil) {
         self.sessionId = sessionId
         self.toolName = toolName
         self.command = command
         self.cwd = cwd
+        self.agentId = agentId
     }
 }
 
 public struct WaitTicketRequest: Codable, Sendable, Equatable {
+    public var ticket: String
+    public init(ticket: String) { self.ticket = ticket }
+}
+
+/// `cancelTicket`: a `cgate run --wait` gave up waiting; its ticket is dropped. Reply: empty.
+/// An older app answers `unknownOp` (the ticket then expires on its own).
+public struct CancelTicketRequest: Codable, Sendable, Equatable {
     public var ticket: String
     public init(ticket: String) { self.ticket = ticket }
 }
@@ -159,7 +173,12 @@ public struct SetGateRequest: Codable, Sendable, Equatable {
 
 public struct KillJobRequest: Codable, Sendable, Equatable {
     public var jobId: UUID
-    public init(jobId: UUID) { self.jobId = jobId }
+    /// true → soft stop of this job only (notice, no signal). nil/false → hard kill (old behaviour).
+    public var soft: Bool?
+    public init(jobId: UUID, soft: Bool? = nil) {
+        self.jobId = jobId
+        self.soft = soft
+    }
 }
 
 public enum GateRequest: OpMessage {
@@ -173,6 +192,7 @@ public enum GateRequest: OpMessage {
     case meeting
     case killJob(KillJobRequest)
     case setSettings(GateSettings)
+    case cancelTicket(CancelTicketRequest)
 
     public static var version: Int { ProtocolVersion.gate }
 
@@ -188,12 +208,14 @@ public enum GateRequest: OpMessage {
         case .meeting: "meeting"
         case .killJob: "killJob"
         case .setSettings: "setSettings"
+        case .cancelTicket: "cancelTicket"
         }
     }
 
     public func encodeBody(into c: inout KeyedEncodingContainer<EnvelopeKey>) throws {
         switch self {
         case .acquire(let b): try c.encode(b, forKey: .body)
+        case .cancelTicket(let b): try c.encode(b, forKey: .body)
         case .killJob(let b): try c.encode(b, forKey: .body)
         case .setSettings(let b): try c.encode(b, forKey: .body)
         case .release(let b): try c.encode(b, forKey: .body)
@@ -217,6 +239,7 @@ public enum GateRequest: OpMessage {
         case "meeting": self = .meeting
         case "killJob": self = .killJob(try c.body(KillJobRequest.self))
         case "setSettings": self = .setSettings(try c.body(GateSettings.self))
+        case "cancelTicket": self = .cancelTicket(try c.body(CancelTicketRequest.self))
         default: throw WireError(.unknownOp, op)
         }
     }
@@ -401,6 +424,7 @@ public enum GateReply: OpMessage {
     case meeting(GateStatus)
     case killJob(GateStatus)
     case setSettings(GateStatus)
+    case cancelTicket
 
     public static var version: Int { ProtocolVersion.gate }
 
@@ -416,13 +440,14 @@ public enum GateReply: OpMessage {
         case .meeting: "meeting"
         case .killJob: "killJob"
         case .setSettings: "setSettings"
+        case .cancelTicket: "cancelTicket"
         }
     }
 
     public func encodeBody(into c: inout KeyedEncodingContainer<EnvelopeKey>) throws {
         switch self {
         case .acquire(let b): try c.encode(b, forKey: .body)
-        case .release: break
+        case .release, .cancelTicket: break
         case .heartbeat(let b): try c.encode(b, forKey: .body)
         case .hookCheck(let b): try c.encode(b, forKey: .body)
         case .waitTicket(let b): try c.encode(b, forKey: .body)
@@ -443,6 +468,7 @@ public enum GateReply: OpMessage {
         case "meeting": self = .meeting(try c.body(GateStatus.self))
         case "killJob": self = .killJob(try c.body(GateStatus.self))
         case "setSettings": self = .setSettings(try c.body(GateStatus.self))
+        case "cancelTicket": self = .cancelTicket
         default: throw WireError(.unknownOp, op)
         }
     }

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// The Settings window, managed by hand. The SwiftUI `Settings` scene + `SettingsLink` is
-/// unreliable from a `MenuBarExtra` in an `LSUIElement` app: the accessory app is never
+/// unreliable from a menu bar popover in an `LSUIElement` app: the accessory app is never
 /// activated, so the window opens behind other apps (or not at all) and, with no Dock icon,
 /// cannot be found. Here: activate the app, then bring our own window to the front.
 @MainActor

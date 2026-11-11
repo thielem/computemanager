@@ -41,7 +41,11 @@ final class DemoGate: GateBackend, @unchecked Sendable {  // guarded by `lock`
                 status.effectiveSlots = 0
                 return .success(.meeting(status))
             case .killJob(let k):
-                status.leases.removeAll { $0.jobId == k.jobId }
+                if k.soft == true, let i = status.leases.firstIndex(where: { $0.jobId == k.jobId }) {
+                    status.leases[i].state = .stopRequested
+                } else {
+                    status.leases.removeAll { $0.jobId == k.jobId }
+                }
                 return .success(.killJob(status))
             case .setSettings(let s):
                 status.settings = s

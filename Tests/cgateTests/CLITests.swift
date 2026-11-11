@@ -8,6 +8,16 @@ import Shared
             .run(RunOptions(maxRuntime: 1200, session: "abc", ticket: nil, command: ["make", "-j8"])))
         #expect(try CLI.parse(["run", "--ticket=t1", "--", "pytest", "--", "x"]) ==
             .run(RunOptions(maxRuntime: nil, session: nil, ticket: "t1", command: ["pytest", "--", "x"])))
+        #expect(try CLI.parse(["run", "--wait", "--max", "5m", "--", "make"]) ==
+            .run(RunOptions(maxRuntime: 300, session: nil, ticket: nil, command: ["make"], wait: true)))
+    }
+
+    @Test func gitLabel() {
+        #expect(GitLabel.format(toplevel: "/x/computemanager-wt/settings", branch: "main--settings")
+                == "settings (main--settings)")
+        #expect(GitLabel.format(toplevel: "/x/computemanager", branch: "main") == "computemanager")
+        #expect(GitLabel.format(toplevel: "/x/repo", branch: "HEAD") == "repo")  // detached
+        #expect(GitLabel.compute(cwd: "/") == nil)  // not a repo
     }
 
     @Test func others() throws {

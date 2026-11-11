@@ -1,4 +1,5 @@
 import Foundation
+import Shared
 
 /// Heavy-command matching for the hook (AGENT-3, AGENT-4).
 ///
@@ -44,6 +45,46 @@ enum CommandMatcher {
         let segs = segments(command)
         guard segs.count == 1 else { return false }
         return layers(segs[0]).contains { basename($0[0]) == "cgate" }
+    }
+
+    /// True if some segment is a `cgate <sub>` invocation (any path, after prefixes).
+    static func invokesCgate(_ command: String, _ sub: String) -> Bool {
+        segments(command).contains { seg in
+            layers(seg).contains { $0.count > 1 && basename($0[0]) == "cgate" && $0[1] == sub }
+        }
+    }
+
+    /// The command text of every `cgate run … -- <cmd…>` in the line (any segment, prefixes and
+    /// `bash -c` stripped), rebuilt exactly as `cgate run` sends it in `acquire`: one word → as is,
+    /// several → `shellQuote`-joined; capped like `AcquireRequest.command`. Redirection words
+    /// (`>x`, `2>&1`, `> x`) are dropped: the shell consumes them, cgate never sees them.
+    static func cgateRunCommands(_ command: String, depth: Int = 0) -> [String] {
+        tokenize(command).flatMap { seg, quoted -> [String] in
+            for layer in layers(seg) {
+                if depth < 3, let line = shellDashC(layer) { return cgateRunCommands(line, depth: depth + 1) }
+                guard layer.count > 1, basename(layer[0]) == "cgate", layer[1] == "run",
+                      let dd = layer.firstIndex(of: "--") else { continue }
+                let off = seg.count - layer.count  // layers are suffixes of the segment
+                let words = dropRedirections(layer[(dd + 1)...], quoted: quoted[(off + dd + 1)...])
+                guard !words.isEmpty else { return [] }
+                return [CommandText.capped(words.count == 1 ? words[0] : words.map(shellQuote).joined(separator: " "))]
+            }
+            return []
+        }
+    }
+
+    private static func dropRedirections(_ w: ArraySlice<String>, quoted: ArraySlice<Bool>) -> [String] {
+        var out: [String] = []
+        var skipNext = false
+        for (x, q) in zip(w, quoted) {
+            if skipNext { skipNext = false; continue }
+            if !q, let r = x.range(of: #"^[0-9]*(>>|>&|<&|&>>|&>|>|<)"#, options: .regularExpression) {
+                if r.upperBound == x.endIndex { skipNext = true }  // `> file`: target is the next word
+                continue
+            }
+            out.append(x)
+        }
+        return out
     }
 
     /// True if `ticket` appears as a whole word (or `--ticket=<id>`) in a cgate segment.
@@ -142,24 +183,33 @@ enum CommandMatcher {
 
     /// Non-empty word lists per segment (prefixes not stripped), heredoc bodies skipped.
     static func segments(_ command: String) -> [[String]] {
+        tokenize(command).map(\.words)
+    }
+
+    /// `segments`, plus per word whether it starts quoted/escaped (a literal, never a redirection).
+    private static func tokenize(_ command: String) -> [(words: [String], quoted: [Bool])] {
         let cs = Array(command)
-        var segs: [[String]] = []
+        var segs: [(words: [String], quoted: [Bool])] = []
         var words: [String] = []
+        var quotedFlags: [Bool] = []
         var word = ""
         var inWord = false
+        var startQuoted = false
         var quote: Character?
         var escape = false
         var heredocs: [(delim: String, dash: Bool)] = []
 
         func endWord() {
-            if inWord { words.append(word) }
+            if inWord { words.append(word); quotedFlags.append(startQuoted) }
             word = ""
             inWord = false
+            startQuoted = false
         }
         func endSegment() {
             endWord()
-            if !words.isEmpty { segs.append(words) }
+            if !words.isEmpty { segs.append((words, quotedFlags)) }
             words = []
+            quotedFlags = []
         }
 
         var i = 0
@@ -175,8 +225,8 @@ enum CommandMatcher {
                 continue
             }
             switch ch {
-            case "\\": escape = true; inWord = true
-            case "'", "\"": quote = ch; inWord = true
+            case "\\": if !inWord { startQuoted = true }; escape = true; inWord = true
+            case "'", "\"": if !inWord { startQuoted = true }; quote = ch; inWord = true
             case " ", "\t": endWord()
             case "<" where i < cs.count && cs[i] == "<":
                 if i + 1 < cs.count && cs[i + 1] == "<" {  // here-string
