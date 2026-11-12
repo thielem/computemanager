@@ -105,8 +105,4 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }
-
-    func popoverDidClose(_ notification: Notification) {
-        model.gate.cancelOffChoice()  // a pending gate-off choice doesn't survive closing the menu
-    }
 }

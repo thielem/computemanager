@@ -7,19 +7,17 @@ struct GateSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label(Self.levelName(gate.switchOn ? .on : (gate.status.level.isOff ? gate.status.level : .noMore)),
-                      systemImage: gate.switchOn ? "bolt.fill" : "bolt.slash.fill")
-                    .foregroundStyle(gate.switchOn ? .primary : .secondary)
+                Label(Self.levelName(gate.isOn ? .on : (gate.status.level.isOff ? gate.status.level : .noMore)),
+                      systemImage: gate.isOn ? "bolt.fill" : "bolt.slash.fill")
+                    .foregroundStyle(gate.isOn ? .primary : .secondary)
                 Spacer()
-                Toggle("", isOn: Binding(get: { gate.switchOn },
+                Toggle("", isOn: Binding(get: { gate.isOn },
                                          set: { on in Task { await gate.setOn(on) } }))
                     .toggleStyle(.switch).labelsHidden().controlSize(.small)
             }
 
-            if gate.offChoicePending {
-                stopChoice([.noMore, .softStop, .hardStop], cancel: true)
-            } else if !gate.escalations.isEmpty {
-                stopChoice(gate.escalations, cancel: false)
+            if !gate.escalations.isEmpty {
+                stopChoice(gate.escalations)
             }
 
             HStack {
@@ -51,16 +49,11 @@ struct GateSection: View {
         }
     }
 
-    private func stopChoice(_ levels: [GateLevel], cancel: Bool) -> some View {
+    private func stopChoice(_ levels: [GateLevel]) -> some View {
         HStack(spacing: 6) {
             ForEach(levels, id: \.self) { level in
                 Button(Self.actionName(level)) { Task { await gate.chooseOff(level) } }
                     .tint(level == .hardStop ? .red : nil)
-            }
-            if cancel {
-                Spacer()
-                Button { gate.cancelOffChoice() } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.borderless).foregroundStyle(.secondary)
             }
         }
         .controlSize(.small)

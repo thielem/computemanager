@@ -6,8 +6,6 @@ import Shared
 @MainActor @Observable
 final class GateViewModel {
     private(set) var status: GateStatus
-    /// Gate toggled off while jobs run: the UI shows No more / Soft / Hard.
-    private(set) var offChoicePending = false
     private(set) var lastError: String?
 
     @ObservationIgnored private let backend: GateBackend
@@ -26,8 +24,6 @@ final class GateViewModel {
     }
 
     var isOn: Bool { status.level == .on }
-    /// What the gate switch shows: a pending off-choice reads as off until chosen or cancelled.
-    var switchOn: Bool { isOn && !offChoicePending }
     var runningJobs: [Lease] { status.leases.filter { $0.state != .done } }
     var queuedCount: Int { status.tickets.count }
     /// Stronger off levels still available (No more → Soft → Hard), only while jobs run.
@@ -41,22 +37,12 @@ final class GateViewModel {
     func refresh() async { await send(.status) }
 
     func setOn(_ on: Bool) async {
-        if on {
-            offChoicePending = false
-            await send(.setGate(SetGateRequest(level: .on)))
-        } else if runningJobs.isEmpty {
-            await send(.setGate(SetGateRequest(level: .noMore)))
-        } else {
-            offChoicePending = true
-        }
+        await send(.setGate(SetGateRequest(level: on ? .on : .noMore)))
     }
 
     func chooseOff(_ level: GateLevel) async {
-        offChoicePending = false
         await send(.setGate(SetGateRequest(level: level)))
     }
-
-    func cancelOffChoice() { offChoicePending = false }
 
     func setSlots(_ n: Int) async {
         await send(.setGate(SetGateRequest(level: status.level, slots: max(0, n))))
@@ -69,7 +55,6 @@ final class GateViewModel {
     }
 
     func meeting() async {
-        offChoicePending = false
         await send(.meeting)
     }
 
