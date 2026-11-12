@@ -5,6 +5,7 @@ import SwiftUI
 struct FanSection: View {
     let fan: FanViewModel
     static let installCommand: String = {
+        if let script = Bundle.main.path(forResource: "install-fand", ofType: "sh") { return "sudo '\(script)'" }
         guard let repo = Bundle.main.object(forInfoDictionaryKey: "CMRepoPath") as? String, !repo.isEmpty
         else { return "sudo scripts/install.sh" }
         return "sudo '\(repo)/scripts/install.sh'"

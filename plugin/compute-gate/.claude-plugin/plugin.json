@@ -1,6 +1,6 @@
 {
   "name": "compute-gate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Gate heavy agent runs (builds, tests) through Compute Manager: slots, tickets, stop notices.",
   "author": { "name": "Compute Manager" }
 }

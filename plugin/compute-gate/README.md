@@ -9,13 +9,12 @@ Hooks + skill that route heavy agent commands through Compute Manager's gate.
 
 ## Install
 
-1. Install `cgate` to `~/.local/bin/cgate` (the hook calls it from there; silent if missing):
-   ```sh
-   scripts/install-cgate.sh
-   ```
+1. Get `cgate`: the Homebrew cask links it (`brew install --cask thielem/tap/compute-manager`),
+   or from a checkout `scripts/install-cgate.sh` puts it in `~/.local/bin`. The hook looks in
+   `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, then `PATH`; silent if missing.
 2. Add the marketplace and install the plugin:
    ```sh
-   claude plugin marketplace add ~/Documents/GitHub/computemanager
+   claude plugin marketplace add thielem/computemanager
    claude plugin install compute-gate@computemanager
    ```
 3. Start ComputeManager.app. Without it, `cgate` fails open (commands run ungated and are
