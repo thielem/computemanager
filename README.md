@@ -28,10 +28,10 @@ A macOS menu bar app that keeps AI coding agents from saturating your Mac. Heavy
 **Homebrew (recommended):**
 
 ```sh
-brew install --cask moritzthiele/tap/compute-manager
+brew install --cask thielem/tap/compute-manager
 ```
 
-Installs the app, the `cgate` CLI and the `fand` daemon (asks for your sudo password). Builds are not notarized yet (developer account pending), so the cask clears the quarantine flag itself.
+Installs the app, the `cgate` CLI and the `fand` daemon (asks for your sudo password).
 
 **From source:**
 
@@ -44,7 +44,7 @@ scripts/install-cgate.sh     # cgate to ~/.local/bin
 ## Claude Code setup
 
 ```sh
-claude plugin marketplace add moritzthiele/computemanager   # or a local clone: /path/to/computemanager
+claude plugin marketplace add thielem/computemanager   # or a local clone: /path/to/computemanager
 claude plugin install compute-gate@computemanager
 ```
 
