@@ -12,31 +12,20 @@ import Testing
         let fake = FakeGate()
         let vm = make(fake)
         await vm.setOn(false)
-        #expect(!vm.offChoicePending)
         #expect(vm.status.level == .noMore)
         #expect(fake.requests == [.setGate(SetGateRequest(level: .noMore))])
     }
 
-    @Test func offWithJobsAsksThenApplies() async {
+    @Test func offWithJobsGoesToNoMoreThenEscalates() async {
         let fake = FakeGate(leases: [lease()])
         let vm = make(fake)
         await vm.setOn(false)
-        #expect(vm.offChoicePending)
-        #expect(fake.requests.isEmpty)
+        #expect(vm.status.level == .noMore)
+        #expect(fake.requests == [.setGate(SetGateRequest(level: .noMore))])
+        #expect(vm.escalations == [.softStop, .hardStop])
         await vm.chooseOff(.softStop)
-        #expect(!vm.offChoicePending)
         #expect(vm.status.level == .softStop)
         #expect(vm.escalations == [.hardStop])
-    }
-
-    @Test func cancelKeepsGateOn() async {
-        let fake = FakeGate(leases: [lease()])
-        let vm = make(fake)
-        await vm.setOn(false)
-        vm.cancelOffChoice()
-        #expect(!vm.offChoicePending)
-        #expect(vm.isOn)
-        #expect(fake.requests.isEmpty)
     }
 
     @Test func escalation() async {
@@ -141,16 +130,6 @@ import Testing
         #expect(try Data(contentsOf: store.backupURL) == junk)
         store.save(.init(settings: GateSettings(), level: .noMore))
         #expect(try Data(contentsOf: store.backupURL) == junk)
-    }
-
-    @Test func closingMenuCancelsPendingOffChoice() async {
-        let fake = FakeGate(leases: [lease()])
-        let app = AppModel(gate: make(fake), fan: FanViewModel(link: FakeFanLink()))
-        await app.gate.setOn(false)
-        #expect(!app.gate.switchOn)
-        app.gate.cancelOffChoice()  // MenuContent.onDisappear
-        #expect(app.gate.switchOn)
-        #expect(fake.requests.isEmpty)
     }
 
     @Test func staleSnapshotsDropped() {
