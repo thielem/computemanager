@@ -13,6 +13,7 @@ TAP_REPO=$GH_OWNER/homebrew-tap
 
 VERSION=${1:?usage: scripts/release.sh <version>  (e.g. 0.1.0)}
 [[ $VERSION =~ ^[0-9]+(\.[0-9]+)*$ ]] || { echo "release: bad version '$VERSION'" >&2; exit 1; }
+[[ -z "${NOTARY_PROFILE:-}" || -n "${SIGN_IDENTITY:-}" ]] || { echo "release: NOTARY_PROFILE needs SIGN_IDENTITY" >&2; exit 1; }
 
 source scripts/build-lock.sh
 cm_lock  # one build at a time; bundle.sh/swiftw below share this lock
@@ -30,10 +31,10 @@ for b in ComputeManager fand cgate; do
   archs=$(lipo -archs "$APP/Contents/MacOS/$b")
   [[ $archs == arm64 ]] || { echo "release: $b is '$archs', expected arm64" >&2; exit 1; }
 done
+cm_unlock  # build done; don't hold the project build lock through notarization
 
 ditto -c -k --keepParent "$APP" "$ZIP"
 if [[ -n "${NOTARY_PROFILE:-}" ]]; then
-  [[ -n "${SIGN_IDENTITY:-}" ]] || { echo "release: NOTARY_PROFILE needs SIGN_IDENTITY" >&2; exit 1; }
   echo "==> notarizing"
   xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
   xcrun stapler staple "$APP"

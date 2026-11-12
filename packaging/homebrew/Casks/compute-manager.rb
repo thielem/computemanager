@@ -1,6 +1,6 @@
 cask "compute-manager" do
   version "0.1.0"
-  sha256 "5947b457d9d91ac373308871ee482a239e67ef6df4ef8937836101b12f9243f9"
+  sha256 "71e40d8739817d5e068512224351e9892da1966bfc471f3490b1a388bfa79dbc"
 
   url "https://github.com/thielem/computemanager/releases/download/v#{version}/ComputeManager-#{version}.zip"
   name "Compute Manager"
@@ -13,7 +13,8 @@ cask "compute-manager" do
   app "ComputeManager.app"
   # Runs before `app` is moved, so the path is inside the staged bundle (copies fand out of it).
   installer script: {
-    executable: "ComputeManager.app/Contents/Resources/install-fand.sh",
+    executable: "/bin/bash",
+    args:       ["#{staged_path}/ComputeManager.app/Contents/Resources/install-fand.sh"],
     sudo:       true,
   }
   binary "#{appdir}/ComputeManager.app/Contents/MacOS/cgate"
@@ -21,8 +22,13 @@ cask "compute-manager" do
   # Order is fixed by Homebrew: launchctl, quit, script, delete; all before the app is removed.
   uninstall launchctl: "com.moritzthiele.cgate.fand",
             quit:      "com.moritzthiele.cgate",
+            # Must not depend on the app (it may already be trashed); launchctl stopped fand already.
             script:    {
-              executable: "#{appdir}/ComputeManager.app/Contents/Resources/uninstall-fand.sh",
+              executable: "/bin/sh",
+              args:       [
+                "-c",
+                "f=/usr/local/libexec/computemanager/fand; [ -x \"$f\" ] && \"$f\" --revert-auto; exit 0",
+              ],
               sudo:       true,
             },
             delete:    [

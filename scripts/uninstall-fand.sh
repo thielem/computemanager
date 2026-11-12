@@ -1,8 +1,9 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Remove fand: stop the daemon (fans revert to Auto), force Auto once more, remove binary, plist,
-# socket directory and log. Idempotent. Used by scripts/uninstall.sh and the Homebrew cask.
+# socket directory and log. Idempotent. Used by scripts/uninstall.sh; shipped in the app for manual removal.
 # Usage: sudo uninstall-fand.sh
 set -euo pipefail
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin  # no Homebrew/GNU tools as root (brew runs us via sudo -E)
 
 LABEL=com.moritzthiele.cgate.fand
 DEST_DIR=/usr/local/libexec/computemanager

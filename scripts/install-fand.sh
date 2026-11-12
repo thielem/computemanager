@@ -1,10 +1,11 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Install fand as a root LaunchDaemon. Idempotent: re-running replaces the binary and reloads.
-# Usage: sudo install-fand.sh [<fand-binary> <plist>]
+# Usage: sudo install-fand.sh [<fand-binary> <plist>]   |   install-fand.sh --check-dirs
 # Without arguments (copy inside ComputeManager.app/Contents/Resources) it installs the bundle's
 # own Contents/MacOS/fand and Contents/Resources/<label>.plist. Used by scripts/install.sh and
 # the Homebrew cask; does not need SUDO_USER.
 set -euo pipefail
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin  # no Homebrew/GNU tools as root (brew runs us via sudo -E)
 
 LABEL=com.moritzthiele.cgate.fand
 DEST_DIR=/usr/local/libexec/computemanager
@@ -19,10 +20,6 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SRC_BIN=${1:-$HERE/../MacOS/fand}
 SRC_PLIST=${2:-$HERE/$LABEL.plist}
 
-[[ $EUID -eq 0 ]] || die "needs root. Run: sudo '$0'"
-[[ -x "$SRC_BIN" && -f "$SRC_PLIST" ]] \
-  || die "missing $SRC_BIN or $SRC_PLIST. Usage: sudo $0 [<fand-binary> <plist>]"
-
 # A root daemon binary must not live under a path a non-root user can modify (binary swap).
 for d in /usr/local /usr/local/libexec "$DEST_DIR"; do
   [[ -e "$d" ]] || continue  # created below as root:wheel 0755
@@ -32,6 +29,11 @@ for d in /usr/local /usr/local/libexec "$DEST_DIR"; do
     die "fix with: sudo chown root:wheel $d && sudo chmod go-w $d"
   fi
 done
+[[ ${1:-} == --check-dirs ]] && exit 0  # pre-check only (scripts/install.sh, before building)
+
+[[ $EUID -eq 0 ]] || die "needs root. Run: sudo '$0'"
+[[ -x "$SRC_BIN" && -f "$SRC_PLIST" ]] \
+  || die "missing $SRC_BIN or $SRC_PLIST. Usage: sudo $0 [<fand-binary> <plist>]"
 
 if launchctl print "system/$LABEL" >/dev/null 2>&1; then
   say "stopping running daemon (fans revert to Auto)"

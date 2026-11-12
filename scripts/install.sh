@@ -16,6 +16,8 @@ if [[ -z "${SUDO_USER:-}" || "$SUDO_USER" == root ]]; then
   exit 1
 fi
 
+scripts/install-fand.sh --check-dirs  # fail before building if the install dir is unsafe
+
 echo "install: building fand (release) as $SUDO_USER"
 sudo -H -u "$SUDO_USER" scripts/swiftw build -c release --product fand
 BIN_DIR=$(sudo -H -u "$SUDO_USER" scripts/swiftw build -c release --show-bin-path)

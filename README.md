@@ -32,6 +32,7 @@ brew install --cask thielem/tap/compute-manager
 ```
 
 Installs the app, the `cgate` CLI and the `fand` daemon (asks for your sudo password).
+If you installed from source before, remove that first: `sudo scripts/uninstall.sh`, then delete the app.
 
 **From source:**
 

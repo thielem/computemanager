@@ -5,7 +5,7 @@
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "for c in \"$HOME/.local/bin/cgate\" /opt/homebrew/bin/cgate /usr/local/bin/cgate \"$(command -v cgate)\"; do [ -x \"$c\" ] && { \"$c\" hook 2>/dev/null; exit 0; }; done; exit 0", "timeout": 5 }
+          { "type": "command", "command": "for c in \"$(command -v cgate)\" \"$HOME/.local/bin/cgate\" /opt/homebrew/bin/cgate /usr/local/bin/cgate; do [ -f \"$c\" ] && [ -x \"$c\" ] && { \"$c\" hook 2>/dev/null; exit 0; }; done; exit 0", "timeout": 5 }
         ]
       }
     ]
