@@ -16,7 +16,7 @@ chmod +x "$PROJ/scripts/check.sh"
 
 # Claude itself keeps the real HOME (auth); only parent-session vars are stripped. User
 # settings/hooks are not loaded (--setting-sources project), so only this plugin's hook runs.
-# The plugin's hooks.json calls the installed ~/.local/bin/cgate; run a copy that uses the debug build.
+# The plugin's hooks.json tries PATH first (debug build is first on PATH below); the copy also pins it in place of ~/.local/bin.
 cc() {  # cc <session-id> <out.jsonl> <prompt>
   local PD="$E2E_TMP/plugin"
   if [[ ! -d "$PD" ]]; then

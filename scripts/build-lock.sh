@@ -19,6 +19,10 @@ cm_lock_is_stale() {
 }
 
 cm_lock() {
+  # Re-entrant for children of the holder (release.sh → bundle.sh → swiftw): they share its lock.
+  if [[ -n "${CM_LOCK_OWNER:-}" && "$(cat "$CM_LOCK/pid" 2>/dev/null)" == "$CM_LOCK_OWNER" ]]; then
+    return 0
+  fi
   local waited=0
   until mkdir "$CM_LOCK" 2>/dev/null; do
     if cm_lock_is_stale; then
@@ -30,6 +34,7 @@ cm_lock() {
     sleep 2
   done
   echo $$ > "$CM_LOCK/pid"
+  export CM_LOCK_OWNER=$$
   trap 'cm_unlock' EXIT
   trap 'exit 130' INT TERM
 }
