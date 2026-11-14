@@ -37,8 +37,18 @@ scripts/release.sh 0.2.0
 ```
 
 Nested executables and the app get `--options runtime --timestamp` (no entitlements needed), the
-zip is notarized, the app stapled and re-zipped. Then run the printed `gh release create …` and
-commit `packaging/homebrew/Casks/compute-manager.rb`.
+zip is notarized, the app stapled and re-zipped, and the cask rendered. Then:
+
+```sh
+git add packaging/homebrew/Casks/compute-manager.rb && git commit -m "compute-manager 0.2.0"
+scripts/publish.sh 0.2.0 --dry-run   # all preflights, prints the writes
+scripts/publish.sh 0.2.0             # asks before writing; --yes skips the prompt
+```
+
+`publish.sh` refuses unless the zip is Developer ID signed, notarized and stapled, the cask matches
+the zip, the tree is clean on `main` and `v0.2.0` is not on origin yet. It then tags and pushes,
+creates the GitHub release, copies the cask into the tap (`../homebrew-tap`, override with
+`TAP_DIR`), commits, pushes, and checks the release asset URL.
 
 ## Tap (first time)
 
@@ -47,8 +57,7 @@ gh repo create thielem/homebrew-tap --public
 gh repo clone thielem/homebrew-tap ../homebrew-tap
 ```
 
-Each release: copy the rendered cask to `../homebrew-tap/Casks/`, commit, push (commands are
-printed by `release.sh`).
+The tap may hold other casks/formulae; `publish.sh` only touches `Casks/compute-manager.rb`.
 
 ## Test install (clean user account)
 
