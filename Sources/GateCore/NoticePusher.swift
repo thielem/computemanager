@@ -4,7 +4,7 @@ import Shared
 
 /// Secondary notice channel (AGENT-10): one user message into a Claude Code session via its
 /// messaging socket (`/tmp/cc-socks/<claude-pid>.sock`, see `ClaudeMessaging`).
-/// The server never has the session token; M0b showed auth is optional on macOS, so only the
+/// The server never has the session token; testing showed auth is optional on macOS, so only the
 /// `user` line is sent (an `auth` line is sent first when a token is given).
 struct NoticePusher: Sendable {
     /// Deliver `text` to the session socket. Best effort; errors are swallowed by the caller.

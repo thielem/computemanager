@@ -39,7 +39,7 @@ struct Push: Sendable, Equatable {
     var text: String
 }
 
-/// Pure gate state machine (PLAN §2 GATE, §5, §6). No I/O, no clock: every mutating call gets
+/// Pure gate state machine (docs/design.md §2 GATE, §5, §6). No I/O, no clock: every mutating call gets
 /// `now`. Invariant: held tickets are a prefix of `tickets` (holds go to the oldest tickets).
 struct GateMachine: Sendable {
     static let unknownSession = "unknown"

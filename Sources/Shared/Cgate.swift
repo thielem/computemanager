@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - cgate exit codes and user-facing messages
 //
-// FROZEN CONTRACT (orchestrator-owned). PLAN §4 "cgate exit codes + output".
+// Wire contract between cgate and its callers (docs/design.md §4 "cgate exit codes + output"); change both sides together.
 // Messages go to stderr as one line. Agents parse nothing but exit codes; the text is for
 // the agent to read and act on, so wording matters.
 

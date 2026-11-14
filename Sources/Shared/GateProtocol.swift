@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Gate protocol (gate.sock)
 //
-// FROZEN CONTRACT (orchestrator-owned).
+// Wire contract between app and cgate; change both sides together.
 //
 // | op           | caller      | request body           | reply body                         |
 // |--------------|-------------|------------------------|------------------------------------|

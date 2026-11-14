@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Wire format
 //
-// FROZEN CONTRACT (orchestrator-owned).
+// Wire contract shared by app, fand and cgate; change both sides together.
 //
 // Transport: Unix domain stream socket, newline-delimited JSON (NDJSON). One JSON object per
 // line, UTF-8, no embedded newlines, max `Defaults.maxLineBytes` per line.

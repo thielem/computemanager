@@ -2,7 +2,7 @@ import Foundation
 
 /// Filesystem locations shared by all binaries.
 ///
-/// FROZEN CONTRACT (orchestrator-owned). Env overrides exist for tests and E2E only.
+/// Shared by app, fand and cgate; change all users together. Env overrides exist for tests and E2E only.
 public enum Paths {
     /// Env var overriding the fand socket path.
     public static let fandSocketEnv = "COMPUTEMANAGER_FAND_SOCK"
@@ -41,7 +41,7 @@ public enum Paths {
     private static var home: String { FileManager.default.homeDirectoryForCurrentUser.path }
 }
 
-/// Claude Code messaging socket (secondary notice channel, AGENT-10; verified in M0b).
+/// Claude Code messaging socket (secondary notice channel, AGENT-10; see docs/design.md §10).
 /// Socket: `/tmp/cc-socks/<claude-pid>.sock`. NDJSON, first line
 /// `{"type":"auth","token":"<token>"}`, then `{"type":"user","message":{"role":"user","content":"<text>"}}`.
 /// Reaches idle sessions too. Never log the token.

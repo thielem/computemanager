@@ -91,8 +91,9 @@ From source: `sudo scripts/uninstall.sh`, then delete the app and `~/.local/bin/
 
 ## Development
 
+- Contributing: [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 - `scripts/check.sh` builds all targets and runs all tests, printing only errors.
-- Builds take a project-wide lock (`scripts/build-lock.sh`): at most one build/test run across all worktrees. Use `scripts/swiftw` instead of `swift` to get the lock.
+- Builds take a project-wide lock (`scripts/build-lock.sh`): at most one build/test run across checkouts. Use `scripts/swiftw` instead of `swift` to get the lock.
 - `scripts/e2e/`: end-to-end tests against a headless gate host (`cli.sh`) and a real `claude -p` session (`claude.sh`). See [scripts/e2e/README.md](scripts/e2e/README.md).
 - Releasing: [docs/RELEASING.md](docs/RELEASING.md).
 

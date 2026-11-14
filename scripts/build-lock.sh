@@ -1,5 +1,5 @@
 # Sourced by check.sh / swiftw. Project-wide build lock: at most 1 build/test run across all
-# worktrees of this project. Lock = directory; holder PID recorded inside. Stale locks (dead
+# checkouts of this project. Lock = directory; holder PID recorded inside. Stale locks (dead
 # holder, or no pid file after ~10 s) are taken over atomically: rename away, then retry mkdir,
 # so two waiters can never both remove a lock and both enter.
 CM_LOCK=/tmp/computemanager-build.lock

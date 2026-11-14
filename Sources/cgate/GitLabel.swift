@@ -1,7 +1,7 @@
 import Foundation
 
 /// Job label for the menu: git toplevel folder name, plus the branch unless main/master
-/// (`settings (main--settings)`). nil (→ cwd basename) when not a repo or git is slow (>200 ms).
+/// (`myrepo (feature-x)`). nil (→ cwd basename) when not a repo or git is slow (>200 ms).
 enum GitLabel {
     static func compute(cwd: String, timeout: TimeInterval = 0.2) -> String? {
         let p = Process()

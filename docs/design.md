@@ -1,16 +1,15 @@
-# Compute Manager — Plan
+# Compute Manager — Design
 
 ## 1. Context
 
 | Item | Value |
 |---|---|
 | Product | macOS menu bar app: fan modes + compute gate for AI agents |
-| Machine | MacBook Pro 14" (Mac14,9), M2 Pro, 2 fans, macOS 27.0.1 |
+| Hardware | Apple Silicon; tested on an M2 Pro MacBook Pro |
 | Users | Single user, local only |
 | Agents in scope | Claude Code only (for now) |
 | Core use case | User needs the machine (e.g. video call) → flip gate off, fans to Auto |
 | Distribution | Local build, ad-hoc signed (`codesign -s -`), no notarization |
-| Status | M0 spikes passed; M1 built (fand, app, GateCore, cgate, plugin), pending user hardware test |
 
 ### Terms
 
@@ -81,7 +80,7 @@ Priority: M = must, S = should, C = could.
 | AGENT-7 | Hook latency ~ms; app unreachable → fail-open | M |
 | AGENT-8 | Claude Code plugin (user scope): hooks.json + skill `compute-gate` + cgate on PATH | M |
 | AGENT-9 | `cgate status` (gate state, slots, running jobs, ETA) | S |
-| AGENT-10 | Secondary notice channel via Claude Code messaging socket (M0b succeeded, see M0 findings) | C |
+| AGENT-10 | Secondary notice channel via Claude Code messaging socket (see hardware findings) | C |
 | AGENT-11 | Optional CLAUDE.md snippet explaining etiquette | S |
 
 ### UI
@@ -284,9 +283,7 @@ packaging/launchd/   com.moritzthiele.cgate.fand.plist
 scripts/
   check.sh  swiftw  build-lock.sh  bundle.sh
   install.sh  uninstall.sh  install-cgate.sh
-docs/                builder-interfaces.md, claude-md-snippet.md
-spikes/              M0 throwaway (smc-probe, msg-probe)
-PLAN.md  TODO.md  CONVENTIONS.md
+docs/                design.md, CONTRIBUTING.md, RELEASING.md, claude-md-snippet.md
 ```
 
 ## 9. Security
@@ -305,32 +302,7 @@ PLAN.md  TODO.md  CONVENTIONS.md
 | Process kills | Only pgids of cgate-spawned children, only on hard stop / walltime+60 s / UI kill |
 | Install | Root files owned root:wheel, 0755/0644; uninstall removes all |
 
-## 10. Milestones
-
-### M0 — Spikes
-- [x] (a) Minimal root CLI `spikes/smc-probe` (user runs it once, no curve tests, no repeats): read fans → Max ≤10 s → read RPM → restore Auto (`F*Md=0`, `Ftst=0`)
-- [x] (b) Probe `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN` from a Bash child: wire format, delivery timing
-- [x] (a) fails → dig deeper (O6: fan control is a must, no read-only fallback). Gate work proceeds regardless
-
-### M1 — Foundations
-- [x] SwiftPM skeleton (targets above)
-- [x] Shared: fand protocol, gate protocol, cgate exit codes + output format
-- [x] `scripts/check.sh`, `CONVENTIONS.md`
-
-### M1 — Parallel packages
-
-| Pkg | Scope |
-|---|---|
-| A | fand (SMC, temps, curve, watchdog, wake, peer auth) + install.sh / uninstall.sh + LaunchDaemon plist |
-| B | Menu bar app UI (fan picker, gate toggle, slots, jobs list, stop prompt, settings, login item) + bundle.sh |
-| C | GateCore (state machine, leases, ETA, tickets, notices, reaper, socket server lib used by app) + cgate CLI (`run`/`wait`/`hook`/`status`) + hooks + plugin + skill |
-
-### M2 — Integration & verification
-- [ ] Wire app ↔ GateCore ↔ fand
-- [ ] Review loop (max 2 rounds)
-- [ ] E2E with real Claude Code session: busy feedback + ticket wake-up, walltime soft→hard, soft stop, hard stop, notice delivery, fan revert on app quit/kill -9
-
-### M0 findings (passed, macOS 27.0.1, Mac14,9)
+## 10. Hardware findings (M2 Pro MacBook Pro, macOS 27)
 
 | Topic | Finding |
 |---|---|
@@ -338,11 +310,9 @@ PLAN.md  TODO.md  CONVENTIONS.md
 | Manual mode | `F{n}Md=1` (ui8), then `F{n}Tg` (flt) works directly; 4'300 → 6'500 RPM in ~2 s |
 | Restore | `F{n}Md=0` returns fans to Apple control |
 | Fans | 2 fans; `F{n}Mn` 2317, `F{n}Mx` 6800 RPM |
-| SMC struct | `SMCParamStruct` needs explicit padding to be 80 bytes. Reference: branch `main--m0-spike`, `spikes/fanprobe/fanprobe.swift` |
+| SMC struct | `SMCParamStruct` needs explicit padding to be 80 bytes. See `Sources/fand/AppleSMC.swift` |
 | Messaging socket | `/tmp/cc-socks/<claude-pid>.sock` (= `$CLAUDE_CODE_MESSAGING_SOCKET`). NDJSON: first `{"type":"auth","token":"$CLAUDE_CODE_MESSAGING_TOKEN"}`, then `{"type":"user","message":{"role":"user","content":"..."}}`. Reaches idle sessions too → AGENT-10 viable |
 | Process tree | Background Bash: `sleep` → `zsh` (own process-group leader) → `claude`. cgate still spawns its child in a new pgid and kills only that |
-
-Process: continue past M0 unless fan writes fail; status updates in chat only, no waiting.
 
 ## 11. Open decisions
 
