@@ -38,11 +38,22 @@ cask "compute-manager" do
               "/var/run/computemanager",
             ]
 
-  zap trash: [
-    "~/Library/Application Support/ComputeManager",
-    "~/Library/Logs/ComputeManager",
-    "~/Library/Preferences/com.moritzthiele.cgate.plist",
-  ]
+  # Removes the Claude Code plugin if `claude` is found (brew's PATH is minimal); never fails the zap.
+  zap script: {
+        executable: "/bin/sh",
+        args:       [
+          "-c",
+          "for c in \"$HOME/.local/bin/claude\" /opt/homebrew/bin/claude /usr/local/bin/claude " \
+          "\"$(command -v claude)\"; do if [ -f \"$c\" ] && [ -x \"$c\" ]; then " \
+          "\"$c\" plugin uninstall compute-gate@computemanager </dev/null; " \
+          "\"$c\" plugin marketplace remove computemanager </dev/null; break; fi; done; exit 0",
+        ],
+      },
+      trash:  [
+        "~/Library/Application Support/ComputeManager",
+        "~/Library/Logs/ComputeManager",
+        "~/Library/Preferences/com.moritzthiele.cgate.plist",
+      ]
 
   caveats <<~EOS
     Fans revert to Auto when Compute Manager quits.

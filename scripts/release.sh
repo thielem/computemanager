@@ -3,9 +3,24 @@
 # Usage: scripts/release.sh <version>
 # Env: SIGN_IDENTITY  "Developer ID Application: …" (unset → ad-hoc, local testing only)
 #      NOTARY_PROFILE notarytool keychain profile    (unset → not notarized)
+#      Both may also come from .env at the repo root (environment wins).
 # Never publishes: scripts/publish.sh does that. See docs/RELEASING.md.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# Optional .env at the repo root: only SIGN_IDENTITY / NOTARY_PROFILE, parsed (not sourced).
+# Values already in the environment win.
+load_env() {
+  local line key val
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line =~ ^[[:space:]]*(export[[:space:]]+)?(SIGN_IDENTITY|NOTARY_PROFILE)=(.*)$ ]] || continue
+    key=${BASH_REMATCH[2]} val=${BASH_REMATCH[3]}
+    val=${val%"${val##*[![:space:]]}"}  # trim trailing whitespace
+    if [[ $val =~ ^\"(.*)\"$ || $val =~ ^\'(.*)\'$ ]]; then val=${BASH_REMATCH[1]}; fi
+    [[ -n ${!key:-} ]] || export "$key=$val"
+  done < "$1"
+}
+[[ -f .env ]] && load_env .env
 
 GH_OWNER=thielem   # GitHub owner of source repo + tap; the only place to change it (fills @GH_OWNER@ in packaging/homebrew/compute-manager.rb.in)
 
@@ -56,4 +71,4 @@ if [[ -z "${SIGN_IDENTITY:-}" || -z "${NOTARY_PROFILE:-}" ]]; then
 
 WARN
 fi
-echo "Next: commit $CASK, then scripts/publish.sh $VERSION --dry-run, then without --dry-run."
+echo "Next: scripts/publish.sh $VERSION --dry-run, then without --dry-run (it commits $CASK)."
