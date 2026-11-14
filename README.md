@@ -106,3 +106,6 @@ From source: `sudo scripts/uninstall.sh`, then delete the app and `~/.local/bin/
 - on uninstall.
 
 The gate logic runs in the user-level app, never in the root daemon.
+
+## License
+MIT, see [LICENSE](LICENSE).
