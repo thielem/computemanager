@@ -10,7 +10,7 @@ struct FanSpec: Equatable, Sendable {
 
 /// Fan + temperature access on top of `SMCKeyIO`. The ONLY place fand writes SMC keys:
 /// writes go through `writeAllowed`, which accepts only `F{n}Md`, `F{n}Tg` and `Ftst`
-/// (PLAN §9), and targets are clamped to `[F{n}Mn, F{n}Mx]`.
+/// (docs/design.md §9), and targets are clamped to `[F{n}Mn, F{n}Mx]`.
 final class FanHardware: Sendable {
     let smc: SMCKeyIO
     let fans: [FanSpec]

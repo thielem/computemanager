@@ -2,7 +2,7 @@ import Foundation
 import IOKit
 
 // Real SMC access via IOKit AppleSMC (struct method selector 2). Reads work unprivileged;
-// writes need root. Layout taken from the M0 spike (spikes/fanprobe), verified on Mac14,9.
+// writes need root. Verified on an M2 Pro MacBook Pro.
 
 private struct SMCVers { var major: UInt8 = 0, minor: UInt8 = 0, build: UInt8 = 0, reserved: UInt8 = 0; var release: UInt16 = 0 }
 private struct SMCPLimit { var version: UInt16 = 0, length: UInt16 = 0; var cpu: UInt32 = 0, gpu: UInt32 = 0, mem: UInt32 = 0 }

@@ -82,7 +82,7 @@ final class FandService: Sendable {
             })
     }
 
-    /// The socket is 0666; access control is the peer-UID check (PLAN §4 fand.sock).
+    /// The socket is 0666; access control is the peer-UID check (docs/design.md §4 fand.sock).
     func start() throws { try server.start(mode: 0o666) }
 
     func stop() {

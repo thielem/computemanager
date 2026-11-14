@@ -10,7 +10,7 @@ let package = Package(
         .executable(name: "cgate", targets: ["cgate"]),
     ],
     targets: [
-        // IPC contracts, codecs, exit codes, defaults, socket helper. Owned by orchestrator.
+        // IPC contracts, codecs, exit codes, defaults, socket helper. Wire contract shared by app, fand and cgate; change both sides together.
         .target(name: "Shared"),
         // Gate state machine + gate socket server (hosted by the app).
         .target(name: "GateCore", dependencies: ["Shared"]),

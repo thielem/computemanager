@@ -2,7 +2,8 @@ import Foundation
 
 // MARK: - Gate data model
 //
-// FROZEN CONTRACT (orchestrator-owned). Semantics (PLAN §2 GATE, §5, §6):
+// Wire contract shared by app and cgate; change both sides together.
+// Semantics (docs/design.md §2 GATE, §5, §6):
 //
 // Levels
 //   on        gate on, `slots` concurrent heavy runs.
@@ -67,7 +68,7 @@ public enum StopReason: String, Codable, Sendable {
     case userKill
 }
 
-/// Registry record of a heavy run holding a slot (PLAN §5).
+/// Registry record of a heavy run holding a slot (docs/design.md §5).
 public struct Lease: Codable, Sendable, Equatable, Identifiable {
     public var jobId: UUID
     /// `unknown` if absent (AGENT-6).

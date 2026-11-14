@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - fand protocol (fand.sock)
 //
-// FROZEN CONTRACT (orchestrator-owned).
+// Wire contract between app and fand; change both sides together.
 //
 // | op          | request body          | reply body                                   |
 // |-------------|-----------------------|----------------------------------------------|

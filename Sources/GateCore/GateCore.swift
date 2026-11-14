@@ -2,9 +2,9 @@ import Darwin
 import Foundation
 import Shared
 
-/// Gate state machine host + socket server. Owner: package C.
+/// Gate state machine host + socket server.
 ///
-/// UI API (frozen): App (B) creates `GateService` with persisted settings/level, subscribes via
+/// UI API: the app creates `GateService` with persisted settings/level, subscribes via
 /// `onChange`, mutates only via `handle(...)`. `onChange` is invoked after every state change
 /// (lease added/removed, ticket change, level/slots/settings change, reaper).
 ///

@@ -13,8 +13,8 @@ import Shared
     }
 
     @Test func gitLabel() {
-        #expect(GitLabel.format(toplevel: "/x/computemanager-wt/settings", branch: "main--settings")
-                == "settings (main--settings)")
+        #expect(GitLabel.format(toplevel: "/x/myrepo", branch: "feature-x")
+                == "myrepo (feature-x)")
         #expect(GitLabel.format(toplevel: "/x/computemanager", branch: "main") == "computemanager")
         #expect(GitLabel.format(toplevel: "/x/repo", branch: "HEAD") == "repo")  // detached
         #expect(GitLabel.compute(cwd: "/") == nil)  // not a repo

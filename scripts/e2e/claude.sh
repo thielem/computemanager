@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Scenario B: real headless Claude Code sessions (sonnet, ≤6 turns each) with the plugin from
-# this worktree and debug cgate first on PATH, against a headless gate host.
+# this checkout and debug cgate first on PATH, against a headless gate host.
 # Needs a logged-in `claude`. Costs up to three small sonnet runs; pick with E2E_ONLY="B1 B3".
 #   B1: agent runs scripts/check.sh directly → hook denies with cgate line → agent re-runs via
 #       cgate run → lease with the session id → completes.

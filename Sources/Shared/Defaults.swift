@@ -2,7 +2,7 @@ import Foundation
 
 /// All default configuration values, in one place. Durations are in seconds.
 ///
-/// FROZEN CONTRACT (orchestrator-owned). Request changes via your status file.
+/// Shared by app, fand and cgate; change all users together.
 public enum Defaults {
     // MARK: Gate
 
