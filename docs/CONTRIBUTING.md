@@ -1,6 +1,6 @@
 # Contributing
 
-Design and protocol details: [design.md](design.md).
+Design and protocol details: [docs/design.md](design.md).
 
 ## Swift
 - Swift 6 language mode, SwiftPM only (no Xcode project). macOS 14+.
