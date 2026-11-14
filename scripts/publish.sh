@@ -54,7 +54,7 @@ APP=$TMP/ComputeManager.app
 [[ -d $APP ]] || die "$ZIP does not contain ComputeManager.app"
 codesign --verify --deep --strict "$APP" 2>"$TMP/cs.err" \
   || die "codesign --verify failed: $(cat "$TMP/cs.err")"
-codesign -dvv "$APP" 2>&1 | grep -q '^Authority=Developer ID Application:' \
+[[ $(codesign -dvv "$APP" 2>&1) == *$'\n'"Authority=Developer ID Application:"* ]] \
   || die "app is not signed with a Developer ID (ad-hoc build?). Rebuild with SIGN_IDENTITY + NOTARY_PROFILE set; see docs/RELEASING.md"
 spctl_out=$(spctl -a -vv -t exec "$APP" 2>&1) && [[ $spctl_out == *"source=Notarized Developer ID"* ]] \
   || die "Gatekeeper rejects the app (not notarized?):"$'\n'"$spctl_out"
