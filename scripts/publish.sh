@@ -95,6 +95,9 @@ Will publish ComputeManager $VERSION (sha256 $SHA):
   2. gh release $TAG with $ZIP
   3. commit "compute-manager $VERSION" in $TAP_DIR ($TAP_REPO) and push
 PLAN
+if [[ $(gh repo view "$SRC_REPO" --json visibility -q .visibility 2>/dev/null) == PRIVATE ]]; then
+  echo "  Note: $SRC_REPO is PRIVATE; brew users can't download the release until it is public."
+fi
 if (( ! DRY && ! YES )); then
   read -r -p "Proceed? [y/N] " ans
   [[ $ans == [yY]* ]] || die "aborted"
@@ -119,8 +122,13 @@ echo "==> post-check"
 if (( DRY )); then
   echo "+ curl -fsIL -o /dev/null $ASSET_URL"
 else
-  curl -fsIL --retry 5 --retry-delay 3 -o /dev/null "$ASSET_URL" || die "release asset not reachable: $ASSET_URL"
-  echo "asset OK: $ASSET_URL"
+  if curl -fsIL --retry 5 --retry-delay 3 -o /dev/null "$ASSET_URL"; then
+    echo "asset OK: $ASSET_URL"
+  else
+    echo "WARNING: release asset not reachable anonymously. Expected while $SRC_REPO is private;" >&2
+    echo "         make it public (gh repo edit $SRC_REPO --visibility public), then re-check:" >&2
+    echo "         curl -fsIL -o /dev/null $ASSET_URL" >&2
+  fi
 fi
 cat <<NEXT
 
