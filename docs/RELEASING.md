@@ -36,17 +36,20 @@ export NOTARY_PROFILE=computemanager-notary
 scripts/release.sh 0.2.0
 ```
 
+Or put both in a gitignored `.env` at the repo root (only these two keys are read; the environment wins):
+`SIGN_IDENTITY="Developer ID Application: <Name> (<TEAMID>)"` and `NOTARY_PROFILE=computemanager-notary`.
+
 Nested executables and the app get `--options runtime --timestamp` (no entitlements needed), the
 zip is notarized, the app stapled and re-zipped, and the cask rendered. Then:
 
 ```sh
-git add packaging/homebrew/Casks/compute-manager.rb && git commit -m "compute-manager 0.2.0"
 scripts/publish.sh 0.2.0 --dry-run   # all preflights, prints the writes
 scripts/publish.sh 0.2.0             # asks before writing; --yes skips the prompt
 ```
 
 `publish.sh` refuses unless the zip is Developer ID signed, notarized and stapled, the cask matches
-the zip, the tree is clean on `main` and `v0.2.0` is not on origin yet. It then tags and pushes,
+the zip, the tree is clean on `main` (except the rendered cask, which it commits first) and `v0.2.0`
+is not on origin yet. It then tags and pushes,
 creates the GitHub release, copies the cask into the tap (`../homebrew-tap`, override with
 `TAP_DIR`), commits, pushes, and checks the release asset URL.
 

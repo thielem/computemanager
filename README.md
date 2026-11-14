@@ -84,8 +84,10 @@ The heavy-command patterns are editable in the app's settings. Matching details 
 
 ```sh
 brew uninstall --cask compute-manager          # removes the daemon; fans go back to Auto
-brew uninstall --cask --zap compute-manager    # also removes settings
+brew uninstall --cask --zap compute-manager    # also removes settings and the Claude Code plugin
 ```
+
+Claude Code plugin alone: `claude plugin uninstall compute-gate@computemanager` (`--zap` does this automatically).
 
 From source: `sudo scripts/uninstall.sh`, then delete the app and `~/.local/bin/cgate`.
 

@@ -71,10 +71,11 @@ ASSET_URL=${ASSET_URL//\#\{version\}/$VERSION}
 echo "==> source repo"
 check_origin . "$SRC_REPO"
 [[ $(git branch --show-current) == main ]] || die "not on main"
-if [[ -n $(git status --porcelain -- "$CASK") ]]; then
-  die "rendered cask is not committed. Run:"$'\n'"  git add $CASK && git commit -m \"compute-manager $VERSION\""
-fi
-[[ -z $(git status --porcelain) ]] || die "working tree not clean"
+# The rendered cask (version + sha256 checked above) may be uncommitted: we commit it. Nothing else may.
+other=$(git status --porcelain -- . ":(exclude)$CASK")
+[[ -z $other ]] || die "working tree not clean (only $CASK may be uncommitted):"$'\n'"$other"
+COMMIT_CASK=0
+[[ -z $(git status --porcelain -- "$CASK") ]] || COMMIT_CASK=1
 git fetch -q origin main
 git merge-base --is-ancestor origin/main HEAD || die "main is behind/diverged from origin/main; pull first"
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "tag $TAG already exists locally"
@@ -88,10 +89,12 @@ check_origin "$TAP_DIR" "$TAP_REPO"
 [[ -z $(git -C "$TAP_DIR" status --porcelain) ]] || die "$TAP_DIR: working tree not clean"
 run git -C "$TAP_DIR" pull -q --ff-only
 
+STEP0=''
+(( ! COMMIT_CASK )) || STEP0="  0. commit $CASK as \"compute-manager $VERSION\" on main"$'\n'
 cat <<PLAN
 
 Will publish ComputeManager $VERSION (sha256 $SHA):
-  1. tag $TAG, push main + $TAG to $SRC_REPO
+${STEP0}  1. tag $TAG, push main + $TAG to $SRC_REPO
   2. gh release $TAG with $ZIP
   3. commit "compute-manager $VERSION" in $TAP_DIR ($TAP_REPO) and push
 PLAN
@@ -104,6 +107,10 @@ if (( ! DRY && ! YES )); then
 fi
 
 echo "==> publishing"
+if (( COMMIT_CASK )); then
+  run git add "$CASK"
+  run git commit -q -m "compute-manager $VERSION" -- "$CASK"
+fi
 run git tag -a "$TAG" -m "$TAG"
 run git push origin main "$TAG"
 run gh release create "$TAG" "$ZIP" --repo "$SRC_REPO" --title "$TAG" --generate-notes --verify-tag
