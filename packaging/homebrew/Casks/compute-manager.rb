@@ -1,6 +1,6 @@
 cask "compute-manager" do
   version "0.1.0"
-  sha256 "71e40d8739817d5e068512224351e9892da1966bfc471f3490b1a388bfa79dbc"
+  sha256 "63c5ff2e68776a450e5ca5ec2291ceaebbe3e3600e61549b5617602c489f825f"
 
   url "https://github.com/thielem/computemanager/releases/download/v#{version}/ComputeManager-#{version}.zip"
   name "Compute Manager"
